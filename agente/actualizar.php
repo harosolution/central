@@ -169,7 +169,7 @@ if ($rc !== 0 || filesize($dump) < 1000) {
     fin('No se pudo respaldar la base. No se tocó nada.');
 }
 $codigo = "$base/respaldos/$hija-$ts-codigo.tgz";
-sh('tar czf ' . escapeshellarg($codigo) . ' -C ' . escapeshellarg($crm) . ' --exclude=./writable --exclude=./public/uploads --exclude=./public/img --exclude="*.bak*" .', $rc);
+sh('tar czf ' . escapeshellarg($codigo) . ' -C ' . escapeshellarg($crm) . ' --exclude=./writable --exclude=./public/uploads --exclude=./public/img --exclude=./uploaded_images --exclude=./public/data --exclude="*.bak*" .', $rc);
 if ($rc > 1) {   // 1 = «archivo cambió mientras se leía»: aceptable
     fin('No se pudo respaldar el código. No se tocó nada.');
 }
