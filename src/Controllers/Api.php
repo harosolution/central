@@ -3,6 +3,7 @@
 namespace Central\Controllers;
 
 use Central\Libraries\Central;
+use Central\Libraries\Licencias;
 use CodeIgniter\Controller;
 
 /**
@@ -91,6 +92,7 @@ class Api extends Controller
         }
         $lat = Central::db()->table('latidos')->where('hija_id', (int) $hija['id'])->get()->getRowArray();
         $est = Central::estado($lat ?: null);
+        $lic = Licencias::estado($hija);
         return $this->response->setJSON([
             'ok'       => true,
             'hija'     => $hija['nombre'],
@@ -98,6 +100,61 @@ class Api extends Controller
             'mensaje'  => $est['mensaje'],
             'piezas'   => $est['piezas'],
             'visto_en' => $lat['visto_en'] ?? null,
+            'licencia' => ['estado' => $lic['estado'], 'color' => $lic['color'], 'mensaje' => $lic['mensaje'], 'vence_en' => $lic['vence_en'], 'dias' => $lic['dias'],
+                           'plan' => $lic['plan']['nombre'] ?? null],
         ]);
+    }
+
+    /** GET /central/api/licencia — todo lo de «Mi licencia» de la hija: plan, vencimiento, cómo pagar y sus últimos pagos. */
+    public function licencia()
+    {
+        $hija = $this->hija();
+        if (! is_array($hija)) {
+            return $hija;
+        }
+        return $this->response->setJSON(['ok' => true, 'hija' => $hija['nombre']] + Licencias::paraHija($hija));
+    }
+
+    /** POST /central/api/pagos  {periodos, codigo} — la hija avisa que yapeó. */
+    public function pagar()
+    {
+        $hija = $this->hija();
+        if (! is_array($hija)) {
+            return $hija;
+        }
+        $b = $this->request->getJSON(true) ?: [];
+        [$ok, $msg, $pago] = Licencias::crearPagoHija($hija, (int) ($b['periodos'] ?? 1), (string) ($b['codigo'] ?? ''));
+        return $this->response->setStatusCode($ok ? 200 : 422)->setJSON(['ok' => $ok, 'mensaje' => $msg, 'pago' => $pago]);
+    }
+
+    /** GET /central/api/pagos/{id} — cómo va un pago (si sigue pendiente, se vuelve a buscar el Yape). */
+    public function pago(int $id)
+    {
+        $hija = $this->hija();
+        if (! is_array($hija)) {
+            return $hija;
+        }
+        $db = Central::db();
+        $p = $db->table('pagos')->where('id', $id)->where('hija_id', (int) $hija['id'])->get()->getRowArray();
+        if (! $p) {
+            return $this->response->setStatusCode(404)->setJSON(['ok' => false, 'error' => 'No existe ese pago.']);
+        }
+        if ($p['estado'] === 'pendiente') {
+            Licencias::validar($id);
+            $p = $db->table('pagos')->where('id', $id)->get()->getRowArray();
+        }
+        $h = $db->table('hijas')->where('id', (int) $hija['id'])->get()->getRowArray();
+        $lic = Licencias::estado($h);
+        return $this->response->setJSON(['ok' => true, 'pago' => Licencias::pagoParaHija($p), 'licencia' => ['estado' => $lic['estado'], 'color' => $lic['color'], 'mensaje' => $lic['mensaje'], 'vence_en' => $lic['vence_en']]]);
+    }
+
+    /** La hija de la llave, activa; si no, la respuesta de error. */
+    private function hija()
+    {
+        $hija = Central::hijaPorLlave($this->request->getHeaderLine('Authorization'));
+        if (! $hija || (int) $hija['activa'] !== 1) {
+            return $this->response->setStatusCode(401)->setJSON(['ok' => false, 'error' => 'Llave no válida.']);
+        }
+        return $hija;
     }
 }
