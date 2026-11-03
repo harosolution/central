@@ -18,6 +18,7 @@ $routes->group('central', ['namespace' => 'Central\Controllers'], static functio
     // Con llave de la hija (Authorization: Bearer …), sin sesión.
     $routes->post('api/latido', 'Api::latido');
     $routes->get('api/estado', 'Api::estado');
+    $routes->get('api/paquete', 'Api::paquete');
 
     // Panel: sesión del CRM + super_admin de la madre (lo revisa el controlador).
     $routes->get('/', 'Panel::index', ['filter' => 'adminauth']);

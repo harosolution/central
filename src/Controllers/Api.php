@@ -59,6 +59,30 @@ class Api extends Controller
         ]);
     }
 
+    /**
+     * GET /central/api/paquete?pieza=crm&ver=2.2.0 — el paquete firmado (lo arma herramientas/empaquetar.php).
+     * Cabeceras X-Sha256 y X-Firma: el agente las comprueba con la llave pública que lleva escrita.
+     */
+    public function paquete()
+    {
+        $hija = Central::hijaPorLlave($this->request->getHeaderLine('Authorization'));
+        if (! $hija || (int) $hija['activa'] !== 1) {
+            return $this->response->setStatusCode(401)->setJSON(['ok' => false, 'error' => 'Llave no válida.']);
+        }
+        $pieza = (string) $this->request->getGet('pieza');
+        $ver = (string) $this->request->getGet('ver');
+        if ($pieza !== 'crm' || ! preg_match('/^\d+\.\d+\.\d+$/', $ver)) {
+            return $this->response->setStatusCode(400)->setJSON(['ok' => false, 'error' => 'Pieza o versión inválida.']);
+        }
+        $f = dirname(__DIR__, 2) . "/datos/paquetes/{$pieza}-{$ver}.tgz";
+        if (! is_file($f) || ! is_file("$f.sha256") || ! is_file("$f.firma")) {
+            return $this->response->setStatusCode(404)->setJSON(['ok' => false, 'error' => "Todavía no hay paquete de $pieza $ver."]);
+        }
+        return $this->response->download($f, null)->setFileName("{$pieza}-{$ver}.tgz")
+            ->setHeader('X-Sha256', trim((string) file_get_contents("$f.sha256")))
+            ->setHeader('X-Firma', trim((string) file_get_contents("$f.firma")));
+    }
+
     public function estado()
     {
         $hija = Central::hijaPorLlave($this->request->getHeaderLine('Authorization'));
