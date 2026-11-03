@@ -25,6 +25,7 @@ $routes->group('central', ['namespace' => 'Central\Controllers'], static functio
     $routes->get('api/pagos/(:num)', 'Api::pago/$1');
     $routes->post('api/actualizar', 'Api::actualizar');          // el cliente pide actualizar desde su CRM
     $routes->post('api/actualizacion', 'Api::actualizacion');    // el agente informa el resultado
+    $routes->post('api/terminos', 'Api::terminos');              // fase 5: el admin de la hija acepta los términos
 
     // Panel: sesión del CRM + super_admin de la madre (lo revisa el controlador).
     $f = ['filter' => 'adminauth'];

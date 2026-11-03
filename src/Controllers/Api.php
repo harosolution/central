@@ -162,6 +162,8 @@ class Api extends Controller
         $e = Licencias::paraHija($hija);
         // Fase 4: estado firmado; la hija corta automatizaciones SOLO con esto (y si tiene menos de 72 h).
         $e['firmado'] = Licencias::firmado($hija, $e);
+        $ac = Licencias::aceptacion((int) $hija['id']);
+        $e['terminos'] = ['version' => Licencias::TERMINOS_VERSION, 'aceptado_en' => $ac['aceptado_en'] ?? null, 'usuario' => $ac['usuario'] ?? ''];
         return $this->response->setJSON(['ok' => true, 'hija' => $hija['nombre']] + $e);
     }
 
@@ -199,6 +201,21 @@ class Api extends Controller
     }
 
     /** La hija de la llave, activa; si no, la respuesta de error. */
+    /** POST /central/api/terminos {version, usuario, correo, empresa, ruc, ip} — fase 5. */
+    public function terminos()
+    {
+        $hija = $this->hija();
+        if (! is_array($hija)) {
+            return $hija;
+        }
+        $b = $this->request->getJSON(true) ?: [];
+        if ((string) ($b['version'] ?? '') !== Licencias::TERMINOS_VERSION) {
+            return $this->response->setStatusCode(409)->setJSON(['ok' => false, 'mensaje' => 'Los términos cambiaron: recarga la página y vuelve a leerlos.', 'version' => Licencias::TERMINOS_VERSION]);
+        }
+        Licencias::aceptar((int) $hija['id'], $b);
+        return $this->response->setJSON(['ok' => true, 'aceptacion' => Licencias::aceptacion((int) $hija['id'])]);
+    }
+
     private function hija()
     {
         $hija = Central::hijaPorLlave($this->request->getHeaderLine('Authorization'));

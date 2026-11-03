@@ -52,6 +52,9 @@ $cuentasIa = $cuentasIa ?? [];
           <td style="max-width:260px">
             <span class="ce-pieza <?= esc($li['color']) ?>"><?= esc($li['plan']['nombre'] ?? 'Sin plan') ?></span>
             <div class="text-xs text-[#9CA3AF] mt-1"><?= esc($li['mensaje']) ?></div>
+            <div class="text-xs mt-1 <?= ! empty($h['terminos']) ? 'text-[#9CA3AF]' : 'text-[#F59E0B]' ?>"><?= ! empty($h['terminos'])
+                ? 'Términos aceptados el ' . esc(date('d/m/Y', strtotime((string) $h['terminos']['aceptado_en']))) . ' por ' . esc($h['terminos']['usuario'] ?: '—')
+                : 'Términos sin aceptar' ?></div>
           </td>
           <td class="text-xs text-[#9CA3AF]">
             <?= esc($h['servidor']) ?>

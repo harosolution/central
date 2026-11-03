@@ -54,6 +54,7 @@ class Panel extends Controller
             $h['estado'] = Central::estado($h['latido']);
             $h['licencia'] = Licencias::estado($h);
             $h['ultima_act'] = Central::ultimaActualizacion((int) $h['id']);
+            $h['terminos'] = Licencias::aceptacion((int) $h['id']);   // fase 5
         }
         unset($h);
         $datos['hijas'] = $hijas;

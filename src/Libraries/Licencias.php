@@ -167,6 +167,30 @@ class Licencias
         return ['datos' => $datos, 'firma' => sodium_bin2hex($firma)];
     }
 
+    // ── Términos del servicio (fase 5) ───────────────────────────────────────
+    /** Cambia cuando cambia el texto de los términos (CRM: app/Views/admin/privacidad_terminos.php): se vuelve a pedir aceptar. */
+    public const TERMINOS_VERSION = '2026-11-03';
+
+    /** Última aceptación de la versión vigente, o null. */
+    public static function aceptacion(int $hijaId): ?array
+    {
+        try {
+            $r = Central::db()->table('aceptaciones')->where('hija_id', $hijaId)->where('version', self::TERMINOS_VERSION)
+                ->orderBy('id', 'DESC')->limit(1)->get()->getRowArray();
+        } catch (\Throwable $e) {
+            return null;
+        }
+        return $r ?: null;
+    }
+
+    public static function aceptar(int $hijaId, array $d): void
+    {
+        $c = static fn ($k, $n) => mb_substr(trim((string) ($d[$k] ?? '')), 0, $n);
+        Central::db()->table('aceptaciones')->insert(['hija_id' => $hijaId, 'version' => self::TERMINOS_VERSION,
+            'usuario' => $c('usuario', 120), 'correo' => $c('correo', 160), 'empresa' => $c('empresa', 200),
+            'ruc' => $c('ruc', 20), 'ip' => $c('ip', 64)]);
+    }
+
     /** Lo que ve la hija para pagar (sin datos internos). */
     public static function paraHija(array $hija): array
     {
