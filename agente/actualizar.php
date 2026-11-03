@@ -126,6 +126,12 @@ foreach (CONSERVAR as $p) {
         @unlink("$stage/$p");
     }
 }
+// Carpetas de DATOS de la hija: si ya existen, el paquete no entra en ellas (fotos subidas, imágenes de productos…).
+foreach (['uploaded_images', 'public/uploads', 'public/img/productos', 'public/data'] as $p) {
+    if (is_dir("$crm/$p")) {
+        sh('rm -rf ' . escapeshellarg("$stage/$p"));
+    }
+}
 @unlink("$stage/.env");
 sh('rm -rf ' . escapeshellarg("$stage/writable"));
 // Antes de tocar nada: ¿puedo escribir todo lo que el paquete va a pisar?
