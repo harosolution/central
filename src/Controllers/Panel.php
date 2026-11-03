@@ -53,6 +53,7 @@ class Panel extends Controller
             $h['latido'] = $lat[(int) $h['id']] ?? null;
             $h['estado'] = Central::estado($h['latido']);
             $h['licencia'] = Licencias::estado($h);
+            $h['ultima_act'] = Central::ultimaActualizacion((int) $h['id']);
         }
         unset($h);
         $datos['hijas'] = $hijas;
@@ -130,6 +131,16 @@ class Panel extends Controller
         $llave = Central::nuevaLlave();
         Central::db()->table('hijas')->where('id', $id)->update(['llave_hash' => hash('sha256', $llave)]);
         return $this->volver('hijas', 'Llave nueva para «' . $h['nombre'] . '». La anterior ya no sirve.')->with('central_llave', $llave)->with('central_llave_de', $h['nombre']);
+    }
+
+    /** Joe pide actualizar una hija: la instala su agente en el próximo latido (≤ 10 min). */
+    public function actualizar(int $id)
+    {
+        if (! $this->permitido()) {
+            return $this->fuera();
+        }
+        [$ok, $msg] = Central::pedirActualizacion($id, 'joe');
+        return $this->volver('hijas', $ok ? $msg : null, $ok ? null : $msg);
     }
 
     // ── Planes, pagos, ajustes ──────────────────────────────────────────────

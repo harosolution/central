@@ -13,7 +13,7 @@
  * Un servidor con varias hijas = un .json por hija; un solo cron.
  * Prueba a mano:  php ~/haro-agente/latido.php -v
  */
-const AGENTE_VER = '1.0.0';
+const AGENTE_VER = '1.2.0';   // 1.2.0: instala la actualización que pidan Joe o el cliente (nunca sola)
 
 $verbose = in_array('-v', $argv ?? [], true);
 $base = __DIR__;
@@ -51,6 +51,7 @@ function ver_crm(string $dir): string
 }
 
 $errores = 0;
+$pendientes = [];
 foreach ($archivos as $f) {
     $nombre = basename($f, '.json');
     $c = json_decode((string) file_get_contents($f), true);
@@ -91,8 +92,34 @@ foreach ($archivos as $f) {
     if ($codigo !== 200 || empty($r['ok'])) {
         $errores++;
         fwrite(STDERR, "[$nombre] fallo HTTP $codigo: " . substr((string) $resp, 0, 200) . "\n");
-    } elseif ($verbose) {
+        continue;
+    }
+    if ($verbose) {
         echo "[$nombre] OK · {$r['color']} · {$r['mensaje']}  (CRM {$cuerpo['crm']} · Chat {$cuerpo['chat']} · Robot {$cuerpo['robot']})\n";
     }
+    // Actualizar A PEDIDO (Joe desde la central o el cliente desde su CRM). Nunca sola.
+    if (! empty($r['actualizar'])) {
+        $pendientes[] = ['nombre' => $nombre, 'c' => $c, 'desde' => $cuerpo['crm']];
+    }
+}
+
+foreach ($pendientes ?? [] as $p) {
+    $nombre = $p['nombre'];
+    $sudo = ! empty($p['c']['dueno']) ? 'sudo -n ' : '';
+    $log = $base . '/actualizar-' . $nombre . '.log';
+    exec($sudo . 'php ' . escapeshellarg($base . '/actualizar.php') . ' ' . escapeshellarg($nombre) . ' > ' . escapeshellarg($log) . ' 2>&1', $o, $rc);
+    $lineas = array_values(array_filter(array_map('trim', (array) @file($log))));
+    $clave = array_values(array_filter($lineas, fn ($l) => preg_match('/LISTO|ERROR|Revertido|al día|ENSAYO/u', $l)));
+    $ultima = (string) ($clave ? end($clave) : end($lineas));
+    $hasta = preg_match('/→ (\d+\.\d+\.\d+)/u', $ultima, $m) ? $m[1] : '';
+    if ($verbose) {
+        echo "[$nombre] actualización: $ultima\n";
+    }
+    $ctx = stream_context_create(['http' => [
+        'method' => 'POST', 'timeout' => 15, 'ignore_errors' => true,
+        'header' => "Content-Type: application/json\r\nAuthorization: Bearer {$p['c']['llave']}\r\n",
+        'content' => json_encode(['ok' => $rc === 0, 'desde' => $p['desde'], 'hasta' => $hasta, 'mensaje' => preg_replace('/^\[[^\]]*\]\s*/', '', $ultima)]),
+    ]]);
+    @file_get_contents(rtrim((string) $p['c']['central'], '/') . '/api/actualizacion', false, $ctx);
 }
 exit($errores ? 1 : 0);

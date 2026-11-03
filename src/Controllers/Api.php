@@ -50,14 +50,55 @@ class Api extends Controller
         }
 
         $est = Central::estado($fila);
+        // ¿Hay una actualización pedida (por Joe o por el cliente)? Se le entrega al agente UNA vez y se borra el pedido.
+        $actualizar = false;
+        if (! empty($hija['actualizar_pedido']) && ($est['piezas']['crm']['al_dia'] ?? true) === false) {
+            $actualizar = true;
+            $db->table('hijas')->where('id', (int) $hija['id'])->update(['actualizar_pedido' => null]);
+            $db->table('actualizaciones')->where('hija_id', (int) $hija['id'])->where('estado', 'pedida')->update(['estado' => 'enviada']);
+        } elseif (! empty($hija['actualizar_pedido'])) {
+            $db->table('hijas')->where('id', (int) $hija['id'])->update(['actualizar_pedido' => null]);   // ya está al día
+        }
         return $this->response->setJSON([
-            'ok'      => true,
-            'hija'    => $hija['nombre'],
-            'color'   => $est['color'],
-            'mensaje' => $est['mensaje'],
-            'piezas'  => $est['piezas'],
-            'hora'    => date('c'),
+            'ok'         => true,
+            'hija'       => $hija['nombre'],
+            'color'      => $est['color'],
+            'mensaje'    => $est['mensaje'],
+            'piezas'     => $est['piezas'],
+            'actualizar' => $actualizar,
+            'hora'       => date('c'),
         ]);
+    }
+
+    /** POST /central/api/actualizar — el cliente pide actualizar desde su CRM. */
+    public function actualizar()
+    {
+        $hija = $this->hija();
+        if (! is_array($hija)) {
+            return $hija;
+        }
+        [$ok, $msg] = Central::pedirActualizacion((int) $hija['id'], 'cliente');
+        return $this->response->setStatusCode($ok ? 200 : 422)->setJSON(['ok' => $ok, 'mensaje' => $msg]);
+    }
+
+    /** POST /central/api/actualizacion {ok, desde, hasta, mensaje} — el agente informa cómo le fue. */
+    public function actualizacion()
+    {
+        $hija = $this->hija();
+        if (! is_array($hija)) {
+            return $hija;
+        }
+        $b = $this->request->getJSON(true) ?: [];
+        $db = Central::db();
+        $fila = $db->table('actualizaciones')->where('hija_id', (int) $hija['id'])->where('estado', 'enviada')->orderBy('id', 'DESC')->get()->getRowArray();
+        $datos = ['estado' => ! empty($b['ok']) ? 'ok' : 'fallo', 'mensaje' => mb_substr((string) ($b['mensaje'] ?? ''), 0, 500), 'terminada_en' => date('Y-m-d H:i:s')];
+        if ($fila) {
+            $db->table('actualizaciones')->where('id', (int) $fila['id'])->update($datos + ['hasta' => mb_substr((string) ($b['hasta'] ?? $fila['hasta']), 0, 20)]);
+        } else {
+            $db->table('actualizaciones')->insert($datos + ['hija_id' => (int) $hija['id'], 'desde' => mb_substr((string) ($b['desde'] ?? ''), 0, 20),
+                'hasta' => mb_substr((string) ($b['hasta'] ?? ''), 0, 20), 'por' => 'agente', 'pedida_en' => date('Y-m-d H:i:s')]);
+        }
+        return $this->response->setJSON(['ok' => true]);
     }
 
     /**
@@ -93,7 +134,13 @@ class Api extends Controller
         $lat = Central::db()->table('latidos')->where('hija_id', (int) $hija['id'])->get()->getRowArray();
         $est = Central::estado($lat ?: null);
         $lic = Licencias::estado($hija);
+        $ua = Central::ultimaActualizacion((int) $hija['id']);
         return $this->response->setJSON([
+            'actualizacion' => [
+                'pedida'  => ! empty($hija['actualizar_pedido']) || ($ua && in_array($ua['estado'], ['pedida', 'enviada'], true)),
+                'ultima'  => $ua ? ['estado' => $ua['estado'], 'desde' => $ua['desde'], 'hasta' => $ua['hasta'], 'por' => $ua['por'],
+                                    'pedida_en' => $ua['pedida_en'], 'terminada_en' => $ua['terminada_en'], 'mensaje' => $ua['mensaje']] : null,
+            ],
             'ok'       => true,
             'hija'     => $hija['nombre'],
             'color'    => $est['color'],

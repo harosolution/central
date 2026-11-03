@@ -23,6 +23,8 @@ $routes->group('central', ['namespace' => 'Central\Controllers'], static functio
     $routes->get('api/licencia', 'Api::licencia');
     $routes->post('api/pagos', 'Api::pagar');
     $routes->get('api/pagos/(:num)', 'Api::pago/$1');
+    $routes->post('api/actualizar', 'Api::actualizar');          // el cliente pide actualizar desde su CRM
+    $routes->post('api/actualizacion', 'Api::actualizacion');    // el agente informa el resultado
 
     // Panel: sesión del CRM + super_admin de la madre (lo revisa el controlador).
     $f = ['filter' => 'adminauth'];
@@ -31,6 +33,7 @@ $routes->group('central', ['namespace' => 'Central\Controllers'], static functio
     $routes->post('hijas', 'Panel::crear', $f);
     $routes->post('hijas/(:num)', 'Panel::editar/$1', $f);
     $routes->post('hijas/(:num)/llave', 'Panel::llave/$1', $f);
+    $routes->post('hijas/(:num)/actualizar', 'Panel::actualizar/$1', $f);
     $routes->post('planes', 'Panel::plan', $f);
     $routes->post('planes/(:num)', 'Panel::plan/$1', $f);
     $routes->post('pagos', 'Panel::pagoManual', $f);

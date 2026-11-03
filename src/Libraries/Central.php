@@ -163,6 +163,38 @@ class Central
         return $row ?: null;
     }
 
+    /**
+     * Pide actualizar el CRM de una hija (Joe desde la central o el cliente desde su CRM). La instala su agente en el
+     * próximo latido (≤ 10 min). Nunca se actualiza sola. [ok, mensaje]
+     */
+    public static function pedirActualizacion(int $hijaId, string $por): array
+    {
+        $db = self::db();
+        $h = $db->table('hijas')->where('id', $hijaId)->get()->getRowArray();
+        $lat = $db->table('latidos')->where('hija_id', $hijaId)->get()->getRowArray();
+        if (! $h || ! $lat) {
+            return [false, 'Esa instalación todavía no tiene agente: no se puede actualizar a distancia.'];
+        }
+        $tiene = self::limpia($lat['crm_ver']);
+        $ultima = self::ultimas()['crm'] ?? null;
+        if (! $tiene || ! $ultima || version_compare($tiene, $ultima, '>=')) {
+            return [false, 'Ya tiene la última versión (' . ($tiene ?: '?') . ').'];
+        }
+        if ($h['actualizar_pedido']) {
+            return [true, 'La actualización ya estaba pedida: se instala en los próximos minutos.'];
+        }
+        $ahora = date('Y-m-d H:i:s');
+        $db->table('hijas')->where('id', $hijaId)->update(['actualizar_pedido' => $ahora, 'actualizar_por' => $por]);
+        $db->table('actualizaciones')->insert(['hija_id' => $hijaId, 'desde' => $tiene, 'hasta' => $ultima, 'por' => $por, 'estado' => 'pedida', 'pedida_en' => $ahora]);
+        return [true, "Actualización a la $ultima pedida: se instala en los próximos 10 minutos, con respaldo y vuelta atrás si algo falla."];
+    }
+
+    /** Última actualización registrada de una hija (o null). */
+    public static function ultimaActualizacion(int $hijaId): ?array
+    {
+        return self::db()->table('actualizaciones')->where('hija_id', $hijaId)->orderBy('id', 'DESC')->limit(1)->get()->getRowArray() ?: null;
+    }
+
     public static function nuevaLlave(): string
     {
         return 'hc_' . bin2hex(random_bytes(24));
