@@ -159,7 +159,10 @@ class Api extends Controller
         if (! is_array($hija)) {
             return $hija;
         }
-        return $this->response->setJSON(['ok' => true, 'hija' => $hija['nombre']] + Licencias::paraHija($hija));
+        $e = Licencias::paraHija($hija);
+        // Fase 4: estado firmado; la hija corta automatizaciones SOLO con esto (y si tiene menos de 72 h).
+        $e['firmado'] = Licencias::firmado($hija, $e);
+        return $this->response->setJSON(['ok' => true, 'hija' => $hija['nombre']] + $e);
     }
 
     /** POST /central/api/pagos  {periodos, codigo} — la hija avisa que yapeó. */

@@ -146,6 +146,27 @@ class Licencias
         return $base + ['estado' => 'vencida', 'color' => 'rojo', 'mensaje' => "La licencia venció el $f."];
     }
 
+    /**
+     * Fase 4: lo que decide el corte, firmado con la llave de la central (datos/firma.sk, ed25519).
+     * {datos: json, firma: hex}. datos = {hija, estado, funciones, vence_en, emitido}. Sin llave → null (la hija no corta).
+     */
+    public static function firmado(array $hija, array $e): ?array
+    {
+        $sk = dirname(__DIR__, 2) . '/datos/firma.sk';
+        if (! function_exists('sodium_crypto_sign_detached') || ! is_readable($sk)) {
+            return null;
+        }
+        $datos = json_encode(['hija' => (string) $hija['nombre'], 'estado' => (string) $e['estado'],
+                              'funciones' => $e['plan']['funciones'] ?? null, 'vence_en' => $e['vence_en'] ?? null,
+                              'emitido' => time()], JSON_UNESCAPED_UNICODE);
+        try {
+            $firma = sodium_crypto_sign_detached($datos, sodium_hex2bin(trim((string) file_get_contents($sk))));
+        } catch (\Throwable $x) {
+            return null;
+        }
+        return ['datos' => $datos, 'firma' => sodium_bin2hex($firma)];
+    }
+
     /** Lo que ve la hija para pagar (sin datos internos). */
     public static function paraHija(array $hija): array
     {
