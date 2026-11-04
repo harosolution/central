@@ -36,6 +36,8 @@ CARPETA=''; SIN_PAQ=0; SIN_APACHE=0; SIN_SSL=0
 DB=''; DBPASS=''; SITIO=''; LLAVE=''; TMP=''; LOG='/dev/null'; MOTIVO=''; TERMINADO=0; CLAVE=''
 CREADO_DIR=0; CREADO_DB=0; CREADO_SITIO=0; CREADO_AGENTE=0; CREADO_AGENTE_DIR=0; CREADO_CRON=0
 EMPRESA=''; ADMIN_NOMBRE=''; ADMIN_EMAIL=''; IP_VISTA=''; ESQUEMA='http'
+# PHP: el CRM pide 8.2 o más (public/index.php). Si el sistema trae uno viejo (Ubuntu 22.04 = 8.1), se pone el 8.3.
+PHP_MIN='8.2'; PHP_NUEVO='8.3'; PHP_PV=''; PHP_PPA=0
 
 paso(){ printf '\n\033[1m%s\033[0m\n' "$*"; printf '\n== %s\n' "$*" >>"$LOG"; }
 log(){ printf '   %s\n' "$*"; printf '%s %s\n' "$(date +%T)" "$*" >>"$LOG"; }
@@ -57,6 +59,19 @@ reportar(){
        --data "$cuerpo" "$CENTRAL/api/instalacion" </dev/null >/dev/null 2>&1 || true
 }
 
+# Antes de deshacer: la página que respondió, los registros del CRM y de Apache, y las versiones (sin claves).
+guardar_diagnostico(){
+  local d="${LOG%.log}-diagnostico"
+  [ "$LOG" != /dev/null ] || return 0
+  [ ! -d "$d" ] || return 0
+  mkdir -p "$d" 2>/dev/null || return 0
+  [ -z "$TMP" ] || cp "$TMP/salud.html" "$d/pagina.html" 2>/dev/null || true
+  [ -z "$CARPETA" ] || cp -r "$CARPETA/writable/logs" "$d/crm-logs" 2>/dev/null || true
+  [ -z "$SITIO" ] || tail -n 80 "/var/log/apache2/$SITIO-error.log" >"$d/apache-error.log" 2>/dev/null || true
+  { echo "php consola: $(php_cli)"; echo "php apache: $(php_apache)"; apache2ctl -M 2>/dev/null | grep -iE 'php|mpm|rewrite|fcgi'; } >"$d/versiones.txt" 2>/dev/null || true
+  chmod -R go-rwx "$d" 2>/dev/null || true
+}
+
 # Si algo falla: se deshace TODO lo que este instalador creó (y nada más).
 al_salir(){
   local rc=$?
@@ -65,6 +80,7 @@ al_salir(){
   trap - ERR
   set +e
   [ -n "$MOTIVO" ] || MOTIVO="falló un paso (código $rc)"
+  [ "$CREADO_DIR" = 1 ] && guardar_diagnostico
   printf '\nDeshaciendo lo que alcancé a crear…\n'
   if [ "$CREADO_SITIO" = 1 ]; then
     a2dissite -q "$SITIO" "$SITIO-le-ssl" >/dev/null 2>&1
@@ -87,18 +103,62 @@ al_salir(){
   printf '\nNo quedó nada a medias. Arregla lo de arriba y vuelve a pegar el MISMO comando (el código sigue sirviendo).\nDetalle: %s\n' "$LOG"
 }
 
-apt_nombre(){ case "$1" in php-mysqli) echo php-mysql;; php-dom) echo php-xml;; *) echo "$1";; esac; }
+# Nombre del paquete apt (con PHP nuevo: php8.3-…).
+apt_nombre(){
+  local p="$1"
+  case "$p" in php-mysqli) p=php-mysql;; php-dom) p=php-xml;; esac
+  if [ -n "$PHP_PV" ]; then
+    case "$p" in libapache2-mod-php) p="libapache2-mod-php$PHP_PV";; php-*) p="php$PHP_PV-${p#php-}";; esac
+  fi
+  echo "$p"
+}
+# ¿$1 >= $2 (por defecto PHP_MIN)? Sin depender de PHP.
+ver_ok(){ local v="$1" min="${2:-$PHP_MIN}"; [ -n "$v" ] && [ "$(printf '%s\n%s\n' "$min" "$v" | sort -V | head -1)" = "$min" ]; }
+php_cli(){ php -r 'echo PHP_VERSION;' </dev/null 2>/dev/null || true; }
+php_apache(){ ls /etc/apache2/mods-enabled/ 2>/dev/null | sed -nE 's/^php([0-9]+\.[0-9]+)\.load$/\1/p' | sort -V | tail -1 || true; }
+
+# PHP viejo: en Ubuntu < 24.04 se pone el 8.3 del repositorio ondrej/php (el de siempre para Ubuntu; tecnovaplus lo
+# usa). Nunca en un servidor con otros sitios: cambiar PHP los afectaría.
+plan_php(){
+  local id='' ver='' otros actual
+  actual="$(php_cli)"; actual="${actual:-ninguno}"
+  if [ -r /etc/os-release ]; then id="$(. /etc/os-release; echo "${ID:-}")"; ver="$(. /etc/os-release; echo "${VERSION_ID:-}")"; fi
+  if [ "$SIN_APACHE" = 0 ] && [ -d /etc/apache2/sites-enabled ]; then
+    otros="$(ls /etc/apache2/sites-enabled 2>/dev/null | grep -vE '^(000-default|default-ssl)\.conf$' | tr '\n' ' ' || true)"
+    [ -z "${otros// /}" ] || die "El CRM necesita PHP $PHP_MIN o más y este servidor tiene PHP $actual con otros sitios (${otros% }). Cambiar PHP los afectaría: actualízalo a mano o usa un servidor limpio."
+  fi
+  case "$id" in
+    ubuntu) if ver_ok "$ver" 24.04; then PHP_PV=''; else PHP_PV="$PHP_NUEVO"; PHP_PPA=1; fi;;
+    debian) ver_ok "$ver" 12 || die "Debian $ver trae PHP viejo: usa Debian 12 o Ubuntu 24.04, o instala PHP $PHP_MIN+ a mano."; PHP_PV='';;
+    *) die "El CRM necesita PHP $PHP_MIN o más (este servidor: $actual). Instálalo y vuelve a pegar el comando.";;
+  esac
+  log "PHP $actual es viejo para el CRM (pide $PHP_MIN o más): pondré PHP ${PHP_PV:-del sistema}$([ "$PHP_PPA" = 1 ] && echo ' desde el repositorio ondrej/php')."
+}
+
+# Deja el PHP nuevo como el de la consola y el de Apache.
+cambiar_php(){
+  [ -n "$PHP_PV" ] || return 0
+  local m
+  update-alternatives --set php "/usr/bin/php$PHP_PV" >>"$LOG" 2>&1 || true
+  if [ "$SIN_APACHE" = 0 ] && command -v a2enmod >/dev/null 2>&1; then
+    for m in $(ls /etc/apache2/mods-enabled/ 2>/dev/null | sed -nE 's/^(php[0-9]+\.[0-9]+)\.load$/\1/p'); do
+      [ "$m" = "php$PHP_PV" ] || a2dismod -q "$m" >>"$LOG" 2>&1 || true
+    done
+    a2dismod -q mpm_event mpm_worker >>"$LOG" 2>&1 || true
+    a2enmod -q mpm_prefork "php$PHP_PV" >>"$LOG" 2>&1 || die "No pude activar PHP $PHP_PV en Apache (ver $LOG)."
+    systemctl restart apache2 </dev/null >>"$LOG" 2>&1 || die "Apache no arrancó con PHP $PHP_PV (ver $LOG)."
+  fi
+  log "PHP $PHP_PV activo$([ "$SIN_APACHE" = 1 ] || echo ' en la consola y en Apache')"
+}
 
 requisitos(){
-  local segunda="${1:-0}" faltan=() m mods salida
+  local segunda="${1:-0}" faltan=() m mods salida apv php_viejo=0
   [ "$segunda" = 1 ] || paso "1/9  Revisando el servidor"
   command -v curl >/dev/null 2>&1    || faltan+=(curl)
   command -v openssl >/dev/null 2>&1 || faltan+=(openssl)
   command -v tar >/dev/null 2>&1     || faltan+=(tar)
   command -v gzip >/dev/null 2>&1    || faltan+=(gzip)
-  if command -v php >/dev/null 2>&1; then
-    php -r 'exit(version_compare(PHP_VERSION, "8.1.0", ">=") ? 0 : 1);' </dev/null \
-      || die "Este servidor tiene PHP $(php -r 'echo PHP_VERSION;' </dev/null) y el CRM necesita 8.1 o más nuevo."
+  if command -v php >/dev/null 2>&1 && ver_ok "$(php_cli)"; then
     mods="$(php -m 2>/dev/null </dev/null | tr 'A-Z' 'a-z')"
     for m in mysqli mbstring intl curl dom zip gd; do
       grep -qx "$m" <<<"$mods" || faltan+=("php-$m")
@@ -107,7 +167,17 @@ requisitos(){
       grep -qx "$m" <<<"$mods" || die "A PHP le falta la extensión «$m», que viene con PHP: reinstala php-cli."
     done
   else
+    php_viejo=1
+  fi
+  if [ "$SIN_APACHE" = 0 ]; then
+    apv="$(php_apache)"
+    if [ -n "$apv" ] && ! ver_ok "$apv"; then php_viejo=1; fi
+  fi
+  if [ "$php_viejo" = 1 ]; then
+    [ "$segunda" = 0 ] || die "PHP sigue siendo menor que $PHP_MIN (consola $(php_cli), Apache $(php_apache)) después de instalar (ver $LOG)."
+    plan_php
     faltan+=(php-cli php-mysqli php-mbstring php-intl php-curl php-dom php-zip php-gd)
+    [ "$SIN_APACHE" = 1 ] || faltan+=(libapache2-mod-php)
   fi
   if ! command -v mysql >/dev/null 2>&1; then
     faltan+=(mariadb-server mariadb-client)
@@ -140,10 +210,15 @@ requisitos(){
       die "Faltan: ${pk[*]}. Instálalos y vuelve a pegar el comando."
     fi
     log "Instalando lo que falta: ${pk[*]} (unos minutos)…"
+    if [ "$PHP_PPA" = 1 ]; then
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq software-properties-common </dev/null >>"$LOG" 2>&1 || die "No pude instalar software-properties-common (ver $LOG)."
+      add-apt-repository -y ppa:ondrej/php </dev/null >>"$LOG" 2>&1 || die "No pude agregar el repositorio de PHP ondrej/php (ver $LOG)."
+    fi
     DEBIAN_FRONTEND=noninteractive apt-get update -qq </dev/null >>"$LOG" 2>&1 || die "apt-get update falló (ver $LOG)."
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pk[@]}" </dev/null >>"$LOG" 2>&1 || die "No se pudo instalar: ${pk[*]} (ver $LOG)."
     systemctl enable --now mariadb </dev/null >>"$LOG" 2>&1 || true
     [ "$SIN_APACHE" = 1 ] || systemctl enable --now apache2 </dev/null >>"$LOG" 2>&1 || true
+    cambiar_php
     requisitos 1
     return 0
   fi
@@ -232,6 +307,12 @@ archivos(){
     [ -e "$CARPETA/$f" ] || die "Al paquete le falta $f: no se puede instalar con él."
   done
   rm -f "$CARPETA/.env"
+  local minp
+  minp="$(grep -oE "minPhpVersion = '[0-9.]+'" "$CARPETA/public/index.php" | grep -oE '[0-9][0-9.]*' | head -1 || true)"
+  if [ -n "$minp" ]; then
+    ver_ok "$(php_cli)" "$minp" || die "Este CRM pide PHP $minp y la consola tiene $(php_cli)."
+    [ "$SIN_APACHE" = 1 ] || [ -z "$(php_apache)" ] || ver_ok "$(php_apache)" "$minp" || die "Este CRM pide PHP $minp y Apache usa PHP $(php_apache)."
+  fi
   for d in cache logs session uploads debugbar; do
     mkdir -p "$CARPETA/writable/$d"
     printf '<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body><p>Directory access is forbidden.</p></body></html>\n' >"$CARPETA/writable/$d/index.html"
@@ -347,7 +428,10 @@ ssl(){
     ESQUEMA=https
     log "certificado SSL emitido: https://$DOMINIO"
   else
-    aviso "certbot no pudo emitir el certificado (ver $LOG): queda por http. Reintenta:  sudo certbot --apache -d $DOMINIO"
+    local det nat=''
+    det="$(grep -m1 -E '^ *Detail:' "$LOG" | sed -E 's/^ *Detail: *//' | cut -c1-180 || true)"
+    case " $(hostname -I 2>/dev/null || true) " in *" $IP_VISTA "*) ;; *) nat=" Este servidor está detrás de NAT (su IP interna no es $IP_VISTA): el puerto 80 de $IP_VISTA tiene que llegar hasta aquí, o el certificado lo pone el proveedor.";; esac
+    aviso "certbot no pudo emitir el certificado${det:+: $det}. Queda por http.$nat Reintenta:  sudo certbot --apache -d $DOMINIO"
   fi
 }
 
@@ -395,8 +479,10 @@ salud(){
            "$ESQUEMA://$DOMINIO/admin/dashboard" </dev/null || true)"
   fi
   if [ "$cod" != 200 ] || grep -qiE 'Whoops|ErrorException|Fatal error|Parse error' "$TMP/salud.html"; then
-    cp "$TMP/salud.html" "${LOG%.log}-salud.html" 2>/dev/null || true
-    die "El CRM no respondió bien (HTTP $cod). Mira $CARPETA/writable/logs/ y ${LOG%.log}-salud.html"
+    local texto
+    texto="$(sed -e 's/<[^>]*>/ /g' "$TMP/salud.html" 2>/dev/null | tr -s ' \r\n\t' ' ' | cut -c1-200 || true)"
+    guardar_diagnostico
+    die "El CRM no respondió bien (HTTP $cod): ${texto:-sin texto}. Diagnóstico en ${LOG%.log}-diagnostico/"
   fi
   log "responde: HTTP 200 en la pantalla de entrada"
   probar_fallo salud
