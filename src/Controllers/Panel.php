@@ -3,6 +3,7 @@
 namespace Central\Controllers;
 
 use Central\Libraries\Central;
+use Central\Libraries\Instalador;
 use Central\Libraries\Licencias;
 use CodeIgniter\Controller;
 
@@ -42,6 +43,7 @@ class Panel extends Controller
             'title' => 'Central de hijas', 'vista' => $vista,
             'ok' => session()->getFlashdata('central_ok'), 'error' => session()->getFlashdata('central_error'),
             'llave' => session()->getFlashdata('central_llave'), 'llaveDe' => session()->getFlashdata('central_llave_de'),
+            'comando' => session()->getFlashdata('central_comando'), 'comandoDe' => session()->getFlashdata('central_comando_de'),
             'planes' => Licencias::planes(), 'ajustes' => Licencias::ajustes(),
         ];
         $hijas = $db->table('hijas')->orderBy('activa', 'DESC')->orderBy('nombre')->get()->getResultArray();
@@ -55,6 +57,7 @@ class Panel extends Controller
             $h['licencia'] = Licencias::estado($h);
             $h['ultima_act'] = Central::ultimaActualizacion((int) $h['id']);
             $h['terminos'] = Licencias::aceptacion((int) $h['id']);   // fase 5
+            $h['instalacion'] = Instalador::ultima((int) $h['id']);   // fase 6
         }
         unset($h);
         $datos['hijas'] = $hijas;
@@ -142,6 +145,22 @@ class Panel extends Controller
         }
         [$ok, $msg] = Central::pedirActualizacion($id, 'joe');
         return $this->volver('hijas', $ok ? $msg : null, $ok ? null : $msg);
+    }
+
+    /** Fase 6: el comando de una línea para instalar esta hija en un servidor nuevo (se muestra UNA vez). */
+    public function instalador(int $id)
+    {
+        if (! $this->permitido()) {
+            return $this->fuera();
+        }
+        $r = $this->request;
+        [$ok, $msg, $codigo] = Instalador::crearCodigo($id, ['empresa' => (string) $r->getPost('empresa'),
+            'admin_nombre' => (string) $r->getPost('admin_nombre'), 'admin_email' => (string) $r->getPost('admin_email')], 'joe');
+        if (! $ok) {
+            return $this->volver('hijas', null, $msg);
+        }
+        $h = Central::db()->table('hijas')->where('id', $id)->get()->getRowArray();
+        return $this->volver('hijas', $msg)->with('central_comando', Instalador::comando($codigo))->with('central_comando_de', (string) ($h['nombre'] ?? ''));
     }
 
     // ── Planes, pagos, ajustes ──────────────────────────────────────────────

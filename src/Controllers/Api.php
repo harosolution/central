@@ -3,6 +3,7 @@
 namespace Central\Controllers;
 
 use Central\Libraries\Central;
+use Central\Libraries\Instalador;
 use Central\Libraries\Licencias;
 use CodeIgniter\Controller;
 
@@ -198,6 +199,28 @@ class Api extends Controller
         $h = $db->table('hijas')->where('id', (int) $hija['id'])->get()->getRowArray();
         $lic = Licencias::estado($h);
         return $this->response->setJSON(['ok' => true, 'pago' => Licencias::pagoParaHija($p), 'licencia' => ['estado' => $lic['estado'], 'color' => $lic['color'], 'mensaje' => $lic['mensaje'], 'vence_en' => $lic['vence_en']]]);
+    }
+
+    /** POST /central/api/instalar {codigo, servidor} — fase 6: el instalador canjea su código por la llave NUEVA de la hija. */
+    public function instalar()
+    {
+        $b = $this->request->getJSON(true);
+        $b = is_array($b) ? $b : [];
+        [$ok, $msg, $datos] = Instalador::canjear((string) ($b['codigo'] ?? ''), (string) ($b['servidor'] ?? ''), (string) $this->request->getIPAddress());
+        $this->response->setHeader('Cache-Control', 'no-store');
+        return $this->response->setStatusCode($ok ? 200 : 422)->setJSON($ok ? ['ok' => true] + $datos : ['ok' => false, 'error' => $msg]);
+    }
+
+    /** POST /central/api/instalacion {ok, mensaje, version} — el instalador avisa cómo terminó (con la llave recién canjeada). */
+    public function instalacionTerminada()
+    {
+        $hija = $this->hija();
+        if (! is_array($hija)) {
+            return $hija;
+        }
+        $b = $this->request->getJSON(true) ?: [];
+        Instalador::reportar((int) $hija['id'], ! empty($b['ok']), (string) ($b['mensaje'] ?? ''), (string) ($b['version'] ?? ''));
+        return $this->response->setJSON(['ok' => true]);
     }
 
     /** La hija de la llave, activa; si no, la respuesta de error. */

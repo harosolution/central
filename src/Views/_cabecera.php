@@ -1,5 +1,5 @@
 <?php
-// Cabecera común de la central: estilos, pestañas y avisos. Variables: $vista, $ok, $error, $llave, $llaveDe.
+// Cabecera común de la central: estilos, pestañas y avisos. Variables: $vista, $ok, $error, $llave, $llaveDe, $comando, $comandoDe.
 $central = rtrim(base_url('central'), '/');
 $tabs = ['hijas' => 'Hijas', 'planes' => 'Planes', 'pagos' => 'Pagos', 'ingresos' => 'Ingresos', 'ajustes' => 'Ajustes de cobro'];
 ?>
@@ -41,5 +41,12 @@ $tabs = ['hijas' => 'Hijas', 'planes' => 'Planes', 'pagos' => 'Pagos', 'ingresos
   <div class="text-sm font-bold text-[#F59E0B]">Llave de «<?= esc($llaveDe) ?>» — cópiala AHORA, no se vuelve a mostrar</div>
   <div class="ce-llave p-2 rounded-lg bg-[#111827]"><?= esc($llave) ?></div>
   <div class="text-xs text-[#9CA3AF]">Va en el agente de esa hija (<code>~/haro-agente/hijas/&lt;nombre&gt;.json</code>) y en su <code>.env</code> como <code>central.token</code>.</div>
+</div>
+<?php endif; ?>
+<?php if (! empty($comando)): ?>
+<div class="p-4 rounded-2xl border border-[#22C55E] bg-[#22C55E]/10 space-y-2 mt-3">
+  <div class="text-sm font-bold text-[#22C55E]">Instalador de «<?= esc($comandoDe ?? '') ?>» — cópialo AHORA y pégalo en el servidor nuevo</div>
+  <div class="ce-llave p-2 rounded-lg bg-[#111827]"><?= esc($comando) ?></div>
+  <div class="text-xs text-[#9CA3AF]">Vale 48 h y sirve hasta que una instalación termine bien. Necesita Ubuntu o Debian con sudo; instala lo que falte. El SSL sale solo si el dominio ya apunta a ese servidor (con Cloudflare, nube en gris). Al terminar muestra UNA vez la clave del administrador. Opciones al final: <code>| sudo bash -s -- --sin-ssl</code> · <code>--sin-paquetes</code> · <code>--sin-apache</code> · <code>--carpeta /ruta</code>.</div>
 </div>
 <?php endif; ?>

@@ -29,6 +29,16 @@ $cuentasIa = $cuentasIa ?? [];
             <div class="font-bold"><?= esc($h['nombre']) ?><?= (int) $h['activa'] === 1 ? '' : ' <span class="text-xs">(de baja)</span>' ?></div>
             <?php if ($h['dominio'] !== ''): ?><a class="text-xs text-[#60A5FA]" href="https://<?= esc($h['dominio']) ?>" target="_blank" rel="noopener"><?= esc($h['dominio']) ?></a><?php endif; ?>
             <?php if ($h['contacto_nombre'] !== '' || $h['contacto_telefono'] !== ''): ?><div class="text-xs text-[#9CA3AF]"><?= esc(trim($h['contacto_nombre'] . ' ' . $h['contacto_telefono'])) ?></div><?php endif; ?>
+            <?php $in = $h['instalacion'] ?? null; if ($in && $in['estado'] !== 'anulado'):
+                $vencido = in_array($in['estado'], ['pendiente', 'canjeado', 'fallo'], true) && strtotime((string) $in['vence_en']) < time();
+                $fecha = static fn ($f) => $f ? date('d/m H:i', strtotime((string) $f)) : '';
+                if ($vencido) { $t = ['#9CA3AF', 'Instalador vencido el ' . $fecha($in['vence_en'])]; }
+                elseif ($in['estado'] === 'pendiente') { $t = ['#F59E0B', 'Instalador listo (CRM ' . $in['version'] . ') · vence ' . $fecha($in['vence_en'])]; }
+                elseif ($in['estado'] === 'canjeado') { $t = ['#F59E0B', '⏳ Instalando en ' . trim($in['servidor'] . ' ' . $in['ip']) . ' desde las ' . $fecha($in['canjeado_en'])]; }
+                elseif ($in['estado'] === 'instalada') { $t = ['#22C55E', '✓ Instalada el ' . $fecha($in['terminada_en']) . ' en ' . trim($in['servidor'] . ' ' . $in['ip']) . ' (CRM ' . $in['version'] . ')']; }
+                else { $t = ['#EF4444', '✗ La instalación falló (' . $fecha($in['terminada_en']) . '): ' . $in['mensaje'] . ' — se puede volver a correr']; } ?>
+              <div class="text-xs mt-1" style="color:<?= $t[0] ?>"><?= esc($t[1]) ?></div>
+            <?php endif; ?>
           </td>
           <td>
             <div class="flex items-center gap-2 font-semibold"><i class="ce-punto" style="background:<?= $colores[$e['color']] ?>"></i><?= esc($textos[$e['color']]) ?></div>
@@ -88,6 +98,19 @@ $cuentasIa = $cuentasIa ?? [];
                 <button class="ce-btn bg-[#374151] text-white">Llave nueva</button>
               </form>
             </details>
+            <?php if (\Central\Libraries\Instalador::ofrecer($h)): $in = $h['instalacion'] ?? []; ?>
+            <details class="ce-edit mt-2">
+              <summary>Instalar en un servidor nuevo</summary>
+              <form method="post" action="<?= $central ?>/hijas/<?= (int) $h['id'] ?>/instalador" class="space-y-2 mt-2">
+                <?= csrf_field() ?>
+                <label class="ce-lbl">Empresa (como saldrá en su CRM)<input class="ce-in" name="empresa" required maxlength="120" value="<?= esc($in['empresa'] ?? '') ?>"></label>
+                <label class="ce-lbl">Administrador: nombre<input class="ce-in" name="admin_nombre" required maxlength="120" value="<?= esc($in['admin_nombre'] ?? $h['contacto_nombre']) ?>"></label>
+                <label class="ce-lbl">Administrador: correo (con él entra)<input class="ce-in" type="email" name="admin_email" required maxlength="120" value="<?= esc($in['admin_email'] ?? '') ?>"></label>
+                <div class="text-xs text-[#9CA3AF]">Dominio: <b><?= esc($h['dominio'] !== '' ? $h['dominio'] : 'falta: ponlo en Editar') ?></b>. Te doy un comando de una línea que vale 48 h.</div>
+                <button class="ce-btn bg-[#22C55E] text-[#0B1220]">Crear instalador</button>
+              </form>
+            </details>
+            <?php endif; ?>
           </td>
         </tr>
       <?php endforeach; ?>

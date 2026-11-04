@@ -10,6 +10,7 @@
  *   POST /central/api/latido el agente de cada hija avisa que está viva y qué versiones tiene
  *   GET  /central/api/estado  la ⚙️ de cada hija pregunta si está al día (versión y licencia)
  *   /central/api/licencia, /central/api/pagos   «Mi licencia» de cada hija (pagar con Yape)
+ *   GET  /central/instalar/<código>   fase 6: instalador de una línea de una hija NUEVA (curl … | sudo bash)
  *
  * @var \CodeIgniter\Router\RouteCollection $routes
  */
@@ -26,6 +27,10 @@ $routes->group('central', ['namespace' => 'Central\Controllers'], static functio
     $routes->post('api/actualizar', 'Api::actualizar');          // el cliente pide actualizar desde su CRM
     $routes->post('api/actualizacion', 'Api::actualizacion');    // el agente informa el resultado
     $routes->post('api/terminos', 'Api::terminos');              // fase 5: el admin de la hija acepta los términos
+    // Fase 6: instalador de una línea. Sin llave ni sesión: el código de un solo uso (48 h) es la autorización.
+    $routes->get('instalar/(:segment)', 'Instalar::script/$1');
+    $routes->post('api/instalar', 'Api::instalar');               // el instalador canjea el código por la llave
+    $routes->post('api/instalacion', 'Api::instalacionTerminada'); // y avisa cómo terminó
 
     // Panel: sesión del CRM + super_admin de la madre (lo revisa el controlador).
     $f = ['filter' => 'adminauth'];
@@ -35,6 +40,7 @@ $routes->group('central', ['namespace' => 'Central\Controllers'], static functio
     $routes->post('hijas/(:num)', 'Panel::editar/$1', $f);
     $routes->post('hijas/(:num)/llave', 'Panel::llave/$1', $f);
     $routes->post('hijas/(:num)/actualizar', 'Panel::actualizar/$1', $f);
+    $routes->post('hijas/(:num)/instalador', 'Panel::instalador/$1', $f);
     $routes->post('planes', 'Panel::plan', $f);
     $routes->post('planes/(:num)', 'Panel::plan/$1', $f);
     $routes->post('pagos', 'Panel::pagoManual', $f);

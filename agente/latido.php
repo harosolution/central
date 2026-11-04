@@ -11,9 +11,10 @@
  *                                          "crm":"/var/www/x-crm","chat":"/var/www/bandeja-x","robot":"/var/www/tecnobot-x"}
  *   crontab:  *\/10 * * * * php ~/haro-agente/latido.php >/dev/null 2>&1
  * Un servidor con varias hijas = un .json por hija; un solo cron.
+ * Una hija puesta con el instalador de una línea (fase 6) lo tiene en /opt/haro-agente, con /etc/cron.d/haro-agente (root).
  * Prueba a mano:  php ~/haro-agente/latido.php -v
  */
-const AGENTE_VER = '1.2.0';   // 1.2.0: instala la actualización que pidan Joe o el cliente (nunca sola)
+const AGENTE_VER = '1.2.1';   // 1.2.1: sin sudo cuando ya corre como root (el instalador lo deja en /opt/haro-agente)
 
 $verbose = in_array('-v', $argv ?? [], true);
 $base = __DIR__;
@@ -105,7 +106,8 @@ foreach ($archivos as $f) {
 
 foreach ($pendientes ?? [] as $p) {
     $nombre = $p['nombre'];
-    $sudo = ! empty($p['c']['dueno']) ? 'sudo -n ' : '';
+    $esRoot = function_exists('posix_geteuid') && posix_geteuid() === 0;
+    $sudo = ! empty($p['c']['dueno']) && ! $esRoot ? 'sudo -n ' : '';
     $log = $base . '/actualizar-' . $nombre . '.log';
     exec($sudo . 'php ' . escapeshellarg($base . '/actualizar.php') . ' ' . escapeshellarg($nombre) . ' > ' . escapeshellarg($log) . ' 2>&1', $o, $rc);
     $lineas = array_values(array_filter(array_map('trim', (array) @file($log))));

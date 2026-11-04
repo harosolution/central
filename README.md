@@ -14,6 +14,16 @@ No es parte del CRM y no llega a ninguna hija.
 - `GET /central/api/estado`: la ⚙️ de la hija pregunta si está al día.
 - Última versión publicada = tag `vX.Y.Z` más alto de los repos de la madre (lo crea `publicar`).
 
+## Fase 6: instalador de una línea
+- En `/central/hijas`, a una hija sin señal: «Instalar en un servidor nuevo» (empresa, nombre y correo del admin; el
+  dominio es el de la hija) → comando `curl -fsSL …/central/instalar/hi_… | sudo bash`. Vale 48 h y sirve hasta que
+  una instalación termine bien. Cada canje rota la llave de la hija (tabla `instalaciones`, solo el sha256 del código).
+- El script es `agente/instalar.sh` con los datos puestos por `Instalador::script()`. Instala lo que falte (apt), baja
+  el paquete firmado, crea base/usuario propios con `deploy/instalar/esquema.sql` + `semilla.sql`, `.env` con secretos
+  nuevos, admin, sitio Apache (+ certbot si el dominio apunta ahí) y el agente en `/opt/haro-agente` (cron de root).
+  Si falla, deshace todo lo que creó.
+- Solo se instala un paquete con `.instalable` (lo deja `herramientas/empaquetar.php`, que llama a `semilla.php` con sudo).
+
 ## Nunca
 - Datos del negocio de una hija, llaves de IA, sesiones de WhatsApp: no pasan por aquí.
 - `config.php` en git.
