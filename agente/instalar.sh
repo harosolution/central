@@ -405,17 +405,17 @@ EOF
 }
 
 ssl(){
-  if [ "$SIN_SSL" = 1 ]; then aviso "SSL omitido (--sin-ssl). Para ponerlo:  sudo certbot --apache -d $DOMINIO"; return 0; fi
+  if [ "$SIN_SSL" = 1 ]; then aviso "SSL omitido (--sin-ssl). Para ponerlo:  sudo bash $AGENTE_DIR/poner-ssl.sh $HIJA"; return 0; fi
   local resuelve mias apunta=0 ip
   resuelve="$(getent ahostsv4 "$DOMINIO" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
   mias=" $(hostname -I 2>/dev/null || true) $IP_VISTA "
   for ip in $resuelve; do case "$mias" in *" $ip "*) apunta=1;; esac; done
   if [ -z "${resuelve// /}" ]; then
-    aviso "$DOMINIO todavía no apunta a ningún lado: queda por http. Cuando apunte a ${IP_VISTA:-este servidor}:  sudo certbot --apache -d $DOMINIO"
+    aviso "$DOMINIO todavía no apunta a ningún lado: queda por http. Cuando apunte a ${IP_VISTA:-este servidor}:  sudo bash $AGENTE_DIR/poner-ssl.sh $HIJA"
     return 0
   fi
   if [ "$apunta" = 0 ]; then
-    aviso "$DOMINIO apunta a ${resuelve% } y este servidor es ${IP_VISTA:-?}: queda por http. Con Cloudflare, pon la nube en gris y luego:  sudo certbot --apache -d $DOMINIO"
+    aviso "$DOMINIO apunta a ${resuelve% } y este servidor es ${IP_VISTA:-?}: queda por http. Con Cloudflare, pon la nube en gris y luego:  sudo bash $AGENTE_DIR/poner-ssl.sh $HIJA"
     return 0
   fi
   if ! command -v certbot >/dev/null 2>&1; then
@@ -431,7 +431,7 @@ ssl(){
     local det nat=''
     det="$(grep -m1 -E '^ *Detail:' "$LOG" | sed -E 's/^ *Detail: *//' | cut -c1-180 || true)"
     case " $(hostname -I 2>/dev/null || true) " in *" $IP_VISTA "*) ;; *) nat=" Este servidor está detrás de NAT (su IP interna no es $IP_VISTA): el puerto 80 de $IP_VISTA tiene que llegar hasta aquí, o el certificado lo pone el proveedor.";; esac
-    aviso "certbot no pudo emitir el certificado${det:+: $det}. Queda por http.$nat Reintenta:  sudo certbot --apache -d $DOMINIO"
+    aviso "certbot no pudo emitir el certificado${det:+: $det}. Queda por http.$nat Reintenta:  sudo bash $AGENTE_DIR/poner-ssl.sh $HIJA"
   fi
 }
 
@@ -510,6 +510,27 @@ agente(){
   chmod 700 "$AGENTE_DIR" "$AGENTE_DIR/hijas"
   poner_agente latido '__LATIDO_B64__'
   poner_agente actualizar '__ACTUALIZAR_B64__'
+  # Ayudante para poner el SSL después (certbot + .env a https, que es lo que se olvida al hacerlo a mano).
+  cat >"$AGENTE_DIR/poner-ssl.sh" <<'SSL'
+#!/usr/bin/env bash
+# Pone el certificado SSL a una hija instalada con el instalador de una línea y pasa su .env a https.
+# Uso:  sudo bash /opt/haro-agente/poner-ssl.sh <hija>      (sirve también si el certificado ya está puesto)
+set -euo pipefail
+B="$(cd "$(dirname "$0")" && pwd)"; H="${1:-}"; F="$B/hijas/$H.json"
+if [ -z "$H" ] || [ ! -f "$F" ]; then echo "Uso: sudo bash $0 <hija>   (hijas: $(ls "$B/hijas" 2>/dev/null | sed 's/\.json$//' | tr '\n' ' '))"; exit 1; fi
+[ "$(id -u)" -eq 0 ] || { echo "Córrelo con sudo."; exit 1; }
+D="$(php -r '$j = json_decode(file_get_contents($argv[1]), true); echo $j["dominio"] ?? "";' "$F")"
+C="$(php -r '$j = json_decode(file_get_contents($argv[1]), true); echo $j["crm"] ?? "";' "$F")"
+[ -n "$D" ] && [ -f "$C/.env" ] || { echo "No encuentro el dominio o el .env de $H."; exit 1; }
+command -v certbot >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-apache </dev/null
+certbot --apache -d "$D" --non-interactive --agree-tos --register-unsafely-without-email --redirect </dev/null \
+  || { echo "certbot no pudo: revisa que $D apunte a este servidor y que el puerto 80 llegue aquí."; exit 1; }
+cp -a "$C/.env" "$C/.env.antes-ssl-$(date +%Y%m%d%H%M%S)"
+sed -i -E "s#^app\.baseURL = .*#app.baseURL = 'https://$D/'#; s#^crm\.urlPrincipal = .*#crm.urlPrincipal = 'https://$D'#" "$C/.env"
+systemctl reload apache2
+echo "Listo: https://$D (el .env ya dice https)."
+SSL
+  chmod 700 "$AGENTE_DIR/poner-ssl.sh"
   CENTRAL="$CENTRAL" LLAVE="$LLAVE" CARPETA="$CARPETA" DOMINIO="$DOMINIO" DUENO="$WEB_USER:$WEB_USER" php -r '
     echo json_encode(["central" => getenv("CENTRAL"), "llave" => getenv("LLAVE"), "crm" => getenv("CARPETA"), "dominio" => getenv("DOMINIO"),
       "dueno" => getenv("DUENO"), "instalada" => date("c")], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
@@ -539,7 +560,8 @@ resumen(){
   printf '  Agente  %s (latido cada 10 min; actualiza solo si lo piden Joe o el cliente)\n' "$AGENTE_DIR"
   printf '  Registro de la instalación (sin claves): %s\n' "$LOG"
   if [ "$ESQUEMA" = http ] && [ "$SIN_APACHE" = 0 ]; then
-    printf '\n  Falta el SSL: cuando %s apunte a este servidor, corre  sudo certbot --apache -d %s\n' "$DOMINIO" "$DOMINIO"
+    printf '\n  Falta el SSL. Cuando %s apunte a este servidor, corre (pone el certificado Y pasa el .env a https):\n' "$DOMINIO"
+    printf '      sudo bash %s/poner-ssl.sh %s\n' "$AGENTE_DIR" "$HIJA"
   fi
   printf '\n  Pendiente dentro del CRM: facturación, couriers, cuentas de pago, WhatsApp y Robot.\n'
   printf '\033[1;32m====================================================================\033[0m\n'
