@@ -35,7 +35,7 @@ $cuentasIa = $cuentasIa ?? [];
                 if ($vencido) { $t = ['#9CA3AF', 'Instalador vencido el ' . $fecha($in['vence_en'])]; }
                 elseif ($in['estado'] === 'pendiente') { $t = ['#F59E0B', 'Instalador listo (CRM ' . $in['version'] . ') · vence ' . $fecha($in['vence_en'])]; }
                 elseif ($in['estado'] === 'canjeado') { $t = ['#F59E0B', '⏳ Instalando en ' . trim($in['servidor'] . ' ' . $in['ip']) . ' desde las ' . $fecha($in['canjeado_en'])]; }
-                elseif ($in['estado'] === 'instalada') { $t = ['#22C55E', '✓ Instalada el ' . $fecha($in['terminada_en']) . ' en ' . trim($in['servidor'] . ' ' . $in['ip']) . ' (CRM ' . $in['version'] . ')']; }
+                elseif ($in['estado'] === 'instalada') { $t = ['#22C55E', '✓ Instalada el ' . $fecha($in['terminada_en']) . ' en ' . trim($in['servidor'] . ' ' . $in['ip']) . ' (CRM ' . $in['version'] . ((int) ($in['con_chat'] ?? 0) === 1 ? ' + Chat y Robot en ' . $in['dominio_chat'] : '') . ')']; }
                 else { $t = ['#EF4444', '✗ La instalación falló (' . $fecha($in['terminada_en']) . '): ' . $in['mensaje'] . ' — se puede volver a correr']; } ?>
               <div class="text-xs mt-1" style="color:<?= $t[0] ?>"><?= esc($t[1]) ?></div>
             <?php endif; ?>
@@ -106,7 +106,10 @@ $cuentasIa = $cuentasIa ?? [];
                 <label class="ce-lbl">Empresa (como saldrá en su CRM)<input class="ce-in" name="empresa" required maxlength="120" value="<?= esc($in['empresa'] ?? '') ?>"></label>
                 <label class="ce-lbl">Administrador: nombre<input class="ce-in" name="admin_nombre" required maxlength="120" value="<?= esc($in['admin_nombre'] ?? $h['contacto_nombre']) ?>"></label>
                 <label class="ce-lbl">Administrador: correo (con él entra)<input class="ce-in" type="email" name="admin_email" required maxlength="120" value="<?= esc($in['admin_email'] ?? '') ?>"></label>
-                <div class="text-xs text-[#9CA3AF]">Dominio: <b><?= esc($h['dominio'] !== '' ? $h['dominio'] : 'falta: ponlo en Editar') ?></b>. Te doy un comando de una línea que vale 48 h.</div>
+                <label class="text-xs flex items-center gap-2"><input type="checkbox" name="con_chat" value="1" <?= ! $in || (int) ($in['con_chat'] ?? 1) === 1 ? 'checked' : '' ?>> Instalar también Chat y Robot</label>
+                <label class="ce-lbl">Dominio del chat (el robot va en /tecnobot/)<input class="ce-in" name="dominio_chat" maxlength="120" placeholder="<?= esc($h['dominio'] !== '' ? \Central\Libraries\Instalador::dominioChat($h['dominio']) : 'chat.empresa.com') ?>" value="<?= esc($in['dominio_chat'] ?? '') ?>"></label>
+                <label class="ce-lbl">Nombre de la vendedora IA<input class="ce-in" name="nombre_robot" maxlength="40" placeholder="Asistente" value="<?= esc($in['nombre_robot'] ?? '') ?>"></label>
+                <div class="text-xs text-[#9CA3AF]">Dominio del CRM: <b><?= esc($h['dominio'] !== '' ? $h['dominio'] : 'falta: ponlo en Editar') ?></b>. Los dos dominios deben apuntar al servidor. Te doy un comando de una línea que vale 48 h.</div>
                 <button class="ce-btn bg-[#22C55E] text-[#0B1220]">Crear instalador</button>
               </form>
             </details>

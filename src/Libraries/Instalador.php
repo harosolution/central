@@ -45,12 +45,15 @@ class Instalador
         return dirname(__DIR__, 2) . '/datos/paquetes';
     }
 
-    /** Última versión del CRM con paquete completo y base inicial (o null). */
-    public static function versionInstalable(): ?string
+    /** Última versión de una pieza (crm | chat | robot) con paquete completo e instalable (o null). */
+    public static function versionInstalable(string $pieza = 'crm'): ?string
     {
+        if (! in_array($pieza, ['crm', 'chat', 'robot'], true)) {
+            return null;
+        }
         $mejor = null;
-        foreach (glob(self::dirPaquetes() . '/crm-*.tgz.instalable') ?: [] as $f) {
-            if (! preg_match('/crm-(\d+\.\d+\.\d+)\.tgz\.instalable$/', $f, $m)) {
+        foreach (glob(self::dirPaquetes() . '/' . $pieza . '-*.tgz.instalable') ?: [] as $f) {
+            if (! preg_match('/' . $pieza . '-(\d+\.\d+\.\d+)\.tgz\.instalable$/', $f, $m)) {
                 continue;
             }
             $tgz = substr($f, 0, -strlen('.instalable'));
@@ -98,6 +101,25 @@ class Instalador
         if ($ver === null) {
             return [false, 'Todavía no hay un paquete del CRM con base inicial: ármalo con herramientas/empaquetar.php.', null];
         }
+        // Chat y Robot (opcional, marcado por defecto en el formulario): van en chat.<dominio>, el robot en /tecnobot/.
+        $conChat = ! empty($d['con_chat']);
+        $domChat = '';
+        $nombreRobot = '';
+        if ($conChat) {
+            $domChat = mb_strtolower(trim((string) ($d['dominio_chat'] ?? '')));
+            $domChat = preg_replace('#^https?://#', '', rtrim($domChat, '/'));
+            if ($domChat === '') {
+                $domChat = self::dominioChat($dom);
+            }
+            if (! preg_match('/^(?=.{4,120}$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/', $domChat) || $domChat === $dom) {
+                return [false, 'El dominio del chat no es válido (ej. chat.empresa.com) o es igual al del CRM.', null];
+            }
+            $nombreRobot = trim((string) preg_replace('/[^\p{L}\p{N} .\'-]/u', '', (string) ($d['nombre_robot'] ?? '')));
+            $nombreRobot = mb_substr($nombreRobot !== '' ? $nombreRobot : 'Asistente', 0, 40);
+            if (self::versionInstalable('chat') === null || self::versionInstalable('robot') === null) {
+                return [false, 'Faltan los paquetes del Chat o del Robot: ármalos con herramientas/empaquetar.php chat|robot X.Y.Z.', null];
+            }
+        }
         // Un solo instalador vigente por hija.
         $db->table('instalaciones')->where('hija_id', $hijaId)->whereIn('estado', ['pendiente', 'canjeado', 'fallo'])->update(['estado' => 'anulado']);
         $codigo = 'hi_' . bin2hex(random_bytes(16));
@@ -106,8 +128,17 @@ class Instalador
             'hija_id' => $hijaId, 'codigo_hash' => hash('sha256', $codigo), 'empresa' => $empresa, 'admin_nombre' => $nombre,
             'admin_email' => $email, 'estado' => 'pendiente', 'version' => $ver, 'por' => mb_substr($por, 0, 30),
             'creada_en' => date('Y-m-d H:i:s', $ahora), 'vence_en' => date('Y-m-d H:i:s', $ahora + self::VIGENCIA_H * 3600),
+            'con_chat' => $conChat ? 1 : 0, 'dominio_chat' => $domChat, 'nombre_robot' => $nombreRobot,
         ]);
-        return [true, "Instalador de «{$h['nombre']}» listo (CRM $ver). Vale " . self::VIGENCIA_H . ' horas.', $codigo];
+        $que = $conChat ? "CRM $ver + Chat " . self::versionInstalable('chat') . ' y Robot ' . self::versionInstalable('robot') . " en $domChat" : "CRM $ver";
+        return [true, "Instalador de «{$h['nombre']}» listo ($que). Vale " . self::VIGENCIA_H . ' horas.', $codigo];
+    }
+
+    /** crm.empresa.com → chat.empresa.com; empresa.com → chat.empresa.com. */
+    public static function dominioChat(string $dominioCrm): string
+    {
+        $d = strtolower(trim($dominioCrm));
+        return 'chat.' . (str_starts_with($d, 'crm.') ? substr($d, 4) : $d);
     }
 
     /** La instalación y la hija de un código vigente (o null). */
@@ -141,7 +172,17 @@ class Instalador
         if ($ver === null || ! preg_match('/^[0-9a-f]{64}$/', $pk) || $tpl === '' || $latido === '' || $actualizar === '') {
             return self::scriptError('La central no tiene listo el paquete del CRM. Avísale a soporte.');
         }
+        $conChat = (int) ($v['inst']['con_chat'] ?? 0) === 1;
+        $vChat = $conChat ? self::versionInstalable('chat') : null;
+        $vRobot = $conChat ? self::versionInstalable('robot') : null;
+        if ($conChat && ($vChat === null || $vRobot === null)) {
+            return self::scriptError('La central no tiene listos los paquetes del Chat y el Robot. Avísale a soporte.');
+        }
         return strtr($tpl, [
+            '__CON_CHAT__'        => $conChat ? '1' : '0',
+            '__DOMINIO_CHAT__'    => $conChat ? (string) $v['inst']['dominio_chat'] : '',
+            '__VERSION_CHAT__'    => (string) $vChat,
+            '__VERSION_ROBOT__'   => (string) $vRobot,
             '__CENTRAL__'         => self::urlCentral(),
             '__CODIGO__'          => $codigo,
             '__HIJA__'            => self::slug($v['hija']['nombre']),
@@ -189,6 +230,10 @@ class Instalador
             'hija' => self::slug($h['nombre']), 'nombre' => $h['nombre'], 'llave' => $llave, 'dominio' => strtolower((string) $h['dominio']),
             'empresa' => $i['empresa'], 'admin_nombre' => $i['admin_nombre'], 'admin_email' => $i['admin_email'],
             'version' => $ver, 'ip' => $ip, 'central' => self::urlCentral(),
+            'con_chat' => (int) ($i['con_chat'] ?? 0) === 1, 'dominio_chat' => (string) ($i['dominio_chat'] ?? ''),
+            'nombre_robot' => (string) ($i['nombre_robot'] ?? ''),
+            'version_chat' => (int) ($i['con_chat'] ?? 0) === 1 ? (string) self::versionInstalable('chat') : '',
+            'version_robot' => (int) ($i['con_chat'] ?? 0) === 1 ? (string) self::versionInstalable('robot') : '',
         ]];
     }
 

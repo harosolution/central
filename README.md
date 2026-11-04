@@ -22,6 +22,7 @@ No es parte del CRM y no llega a ninguna hija.
   el paquete firmado, crea base/usuario propios con `deploy/instalar/esquema.sql` + `semilla.sql`, `.env` con secretos
   nuevos, admin, sitio Apache (+ certbot si el dominio apunta ahí) y el agente en `/opt/haro-agente` (cron de root).
   Si falla, deshace todo lo que creó.
+- Chat y Robot (fase 6b, casilla marcada por defecto): `chat.<dominio>` (robot en `/tecnobot/`), servicios `haro-<hija>-chat|robot` como el usuario `haro`, Node 20 (el del sistema u oficial en /opt/haro-node), configuración del robot NEUTRA (`instalar/robot-inicial.json`, sin datos de TECNOVA, apagado, IA sin key). Paquetes: `empaquetar.php chat|robot X.Y.Z`. Ayudantes en la hija: `/opt/haro-agente/poner-ssl.sh <hija>` y `poner-tienda-ia.sh <hija> ria_…`.
 - Solo se instala un paquete con `.instalable` (lo deja `herramientas/empaquetar.php`, que llama a `semilla.php` con sudo).
 
 ## Nunca

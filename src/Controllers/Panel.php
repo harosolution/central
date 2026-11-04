@@ -155,7 +155,9 @@ class Panel extends Controller
         }
         $r = $this->request;
         [$ok, $msg, $codigo] = Instalador::crearCodigo($id, ['empresa' => (string) $r->getPost('empresa'),
-            'admin_nombre' => (string) $r->getPost('admin_nombre'), 'admin_email' => (string) $r->getPost('admin_email')], 'joe');
+            'admin_nombre' => (string) $r->getPost('admin_nombre'), 'admin_email' => (string) $r->getPost('admin_email'),
+            'con_chat' => (bool) $r->getPost('con_chat'), 'dominio_chat' => (string) $r->getPost('dominio_chat'),
+            'nombre_robot' => (string) $r->getPost('nombre_robot')], 'joe');
         if (! $ok) {
             return $this->volver('hijas', null, $msg);
         }

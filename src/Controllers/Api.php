@@ -103,7 +103,7 @@ class Api extends Controller
     }
 
     /**
-     * GET /central/api/paquete?pieza=crm&ver=2.2.0 — el paquete firmado (lo arma herramientas/empaquetar.php).
+     * GET /central/api/paquete?pieza=crm|chat|robot&ver=2.2.0 — el paquete firmado (lo arma herramientas/empaquetar.php).
      * Cabeceras X-Sha256 y X-Firma: el agente las comprueba con la llave pública que lleva escrita.
      */
     public function paquete()
@@ -114,7 +114,7 @@ class Api extends Controller
         }
         $pieza = (string) $this->request->getGet('pieza');
         $ver = (string) $this->request->getGet('ver');
-        if ($pieza !== 'crm' || ! preg_match('/^\d+\.\d+\.\d+$/', $ver)) {
+        if (! in_array($pieza, ['crm', 'chat', 'robot'], true) || ! preg_match('/^\d+\.\d+\.\d+$/', $ver)) {
             return $this->response->setStatusCode(400)->setJSON(['ok' => false, 'error' => 'Pieza o versión inválida.']);
         }
         $f = dirname(__DIR__, 2) . "/datos/paquetes/{$pieza}-{$ver}.tgz";
