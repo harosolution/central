@@ -267,7 +267,10 @@ if ($pieza === 'chat' || $pieza === 'robot') {
         fin("No puedo escribir en $dir. No se tocó nada.");
     }
     $svc = trim((string) ($c[$pieza . '_servicio'] ?? '')) ?: servicioDe($dir);
-    if ($svc === '' || ! preg_match('/^[A-Za-z0-9@_.-]+\.service$/', $svc)) {
+    if ($svc !== '' && substr($svc, -8) !== '.service') {
+        $svc .= '.service';   // el instalador lo guarda sin «.service» (haro-<hija>-chat)
+    }
+    if ($svc === '' || ! preg_match('/^[A-Za-z0-9@_.-]+\.service$/', $svc) || ! is_file("/etc/systemd/system/$svc")) {
         fin("No encuentro el servicio de systemd que corre $dir. No se tocó nada.");
     }
     if ($pieza === 'chat') {
@@ -359,7 +362,8 @@ if ($pieza === 'chat' || $pieza === 'robot') {
     // La puerta del conector de Claude de este robot (poner-conector.sh): misma versión del código.
     if ($pieza === 'robot') {
         $pd = rtrim((string) ($c['conector'] ?? "/var/www/$hija-conector/tecnobot"), '/');
-        $ps = trim((string) ($c['conector_servicio'] ?? "haro-$hija-conector.service"));
+        $ps = trim((string) ($c['conector_servicio'] ?? "haro-$hija-conector"));
+        $ps .= substr($ps, -8) === '.service' ? '' : '.service';
         if (is_file("$pd/server.js") && is_file("/etc/systemd/system/$ps") && envDe("$pd/.env", 'CONECTOR_ACTIVO') === '1') {
             $pp = envDe("$pd/.env", 'PUERTO');
             $presp = "$base/respaldos/$hija-conector-$ts.tgz";
