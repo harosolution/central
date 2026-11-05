@@ -50,6 +50,7 @@ NOMBRE_ROBOT=''; ESQUEMA_CHAT='http'; BOTKEY=''; CRM_KEY=''
 CREADO_CHAT=0; CREADO_ROBOT=0; CREADO_SITIO_CHAT=0; CREADO_UNIDADES=0
 # Fase 6c: MODO=agregar = poner Chat y Robot a una hija YA instalada (su CRM no se toca, salvo el enlace con el chat).
 MODO='__MODO__'; DBUSER=''; ENV_RESPALDO=''; JSON_RESPALDO=''
+TIENDA_OK=0   # fase 6d: el robot recibió su clave de la Tienda IA (Recargas IA de streamy)
 
 paso(){ printf '\n\033[1m%s\033[0m\n' "$*"; printf '\n== %s\n' "$*" >>"$LOG"; }
 log(){ printf '   %s\n' "$*"; printf '%s %s\n' "$(date +%T)" "$*" >>"$LOG"; }
@@ -889,8 +890,30 @@ EOF
   cod="$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H "x-bot-key: $CRM_KEY" "http://127.0.0.1:$P_CHAT/estado" </dev/null || true)"
   [ "$cod" = 200 ] || die "El chat no aceptó la clave del CRM (HTTP $cod)."
   log "CRM enlazado: entra al chat sin otra clave, manda WhatsApp por él y muestra el Robot en su barra"
+  tienda_ia
   https_del_proxy
   probar_fallo chat
+}
+
+# Fase 6d: la central crea en streamy la cuenta de Recargas IA del robot (queda en la lista de cuentas, enlazada a la
+# hija) y le pasa la clave UNA vez a este instalador: el robot compra IA desde su panel sin pasos aparte. La clave
+# no se muestra ni se escribe en el registro.
+tienda_ia(){
+  local resp code tok
+  resp="$(curl -sS -m 90 -w '\n%{http_code}' -X POST -H "Authorization: Bearer $LLAVE" -H 'Content-Type: application/json' \
+          --data '{}' "$CENTRAL/api/tienda-ia" </dev/null 2>>"$LOG" || true)"
+  code="${resp##*$'\n'}"
+  resp="${resp%$'\n'*}"
+  tok="$(jcampo "$resp" token)"
+  if [ "$code" = 200 ] && [[ "$tok" =~ ^ria_[0-9a-f]{48}$ ]]; then
+    env_poner "$ROBOT_DIR/.env" TIENDA_IA_TOKEN "$tok" "="
+    systemctl restart "$UNIDAD_ROBOT" >>"$LOG" 2>&1 || true
+    esperar_http "http://127.0.0.1:$P_ROBOT/tecnobot/api/equipo" 200 40 || die "El robot no volvió a arrancar con su clave de la Tienda IA."
+    TIENDA_OK=1
+    log "$(jcampo "$resp" mensaje) El robot ya puede comprar IA desde su panel."
+  else
+    aviso "No se creó la cuenta de Recargas IA ($(jcampo "$resp" error)). Para ponerla después:  sudo bash $AGENTE_DIR/poner-tienda-ia.sh $HIJA ria_…"
+  fi
 }
 
 # Servidor detrás de un proxy del proveedor que ya da el https (Traefik de DatabaseMart y parecidos): certbot no pudo o
@@ -1015,8 +1038,12 @@ resumen_chat(){
   printf '\n  Chat:      %s://%s/   (usuario admin; desde el CRM entra sin clave)\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT"
   printf '             WhatsApp SIN vincular: escanea el QR en %s://%s/admin con el celular de la empresa.\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT"
   printf '  Robot:     %s://%s/tecnobot/   «%s», APAGADO y sin key de IA.\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT" "$NOMBRE_ROBOT"
-  printf '             Para que compre IA: crea su token en streamy (Recargas IA → Crear cuenta y clave) y corre\n'
-  printf '                 sudo bash %s/poner-tienda-ia.sh %s ria_…\n' "$AGENTE_DIR" "$HIJA"
+  if [ "$TIENDA_OK" = 1 ]; then
+    printf '             Su cuenta de Recargas IA ya está creada: compra IA desde el panel del robot.\n'
+  else
+    printf '             Para que compre IA: crea su token en streamy (Recargas IA → Crear cuenta y clave) y corre\n'
+    printf '                 sudo bash %s/poner-tienda-ia.sh %s ria_…\n' "$AGENTE_DIR" "$HIJA"
+  fi
   printf '  Servicios: %s (puerto %s) · %s (puerto %s), como el usuario %s\n' "$UNIDAD_CHAT" "$P_CHAT" "$UNIDAD_ROBOT" "$P_ROBOT" "$RUN_USER"
   if [ "$ESQUEMA_CHAT" = http ]; then
     printf '\n  \033[33mOJO: sin https NO se puede entrar al chat ni al robot (su sesión es solo https). Cuando %s apunte aquí:\033[0m\n' "$DOMINIO_CHAT"
@@ -1177,8 +1204,12 @@ resumen(){
     printf '\n  Chat:      %s://%s/   (usuario admin, la MISMA clave; desde el CRM entra sin clave)\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT"
     printf '             WhatsApp SIN vincular: escanea el QR en %s://%s/admin con el celular de la empresa.\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT"
     printf '  Robot:     %s://%s/tecnobot/   «%s», APAGADO y sin key de IA.\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT" "$NOMBRE_ROBOT"
-    printf '             Para que compre IA: crea su token en streamy (Recargas IA → Crear cuenta y clave) y corre\n'
-    printf '                 sudo bash %s/poner-tienda-ia.sh %s ria_…\n' "$AGENTE_DIR" "$HIJA"
+    if [ "$TIENDA_OK" = 1 ]; then
+      printf '             Su cuenta de Recargas IA ya está creada: compra IA desde el panel del robot.\n'
+    else
+      printf '             Para que compre IA: crea su token en streamy (Recargas IA → Crear cuenta y clave) y corre\n'
+      printf '                 sudo bash %s/poner-tienda-ia.sh %s ria_…\n' "$AGENTE_DIR" "$HIJA"
+    fi
     printf '  Servicios: %s (puerto %s) · %s (puerto %s), como el usuario %s\n' "$UNIDAD_CHAT" "$P_CHAT" "$UNIDAD_ROBOT" "$P_ROBOT" "$RUN_USER"
     if [ "$ESQUEMA_CHAT" = http ]; then
       printf '\n  \033[33mOJO: sin https NO se puede entrar al chat ni al robot (su sesión es solo https). Pon el SSL apenas el dominio apunte.\033[0m\n'

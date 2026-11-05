@@ -225,6 +225,21 @@ class Api extends Controller
         return $this->response->setJSON(['ok' => true]);
     }
 
+    /**
+     * POST /central/api/tienda-ia — fase 6d: el instalador pide la cuenta de Recargas IA (streamy) del robot que está
+     * poniendo. Solo con una instalación con Robot en curso de esa hija; la clave sale UNA vez.
+     */
+    public function tiendaIa()
+    {
+        $hija = $this->hija();
+        if (! is_array($hija)) {
+            return $hija;
+        }
+        [$ok, $msg, $token] = Instalador::tiendaIa($hija);
+        $this->response->setHeader('Cache-Control', 'no-store');
+        return $this->response->setStatusCode($ok ? 200 : 422)->setJSON($ok ? ['ok' => true, 'mensaje' => $msg, 'token' => $token] : ['ok' => false, 'error' => $msg]);
+    }
+
     /** La hija de la llave, activa; si no, la respuesta de error. */
     /** POST /central/api/terminos {version, usuario, correo, empresa, ruc, ip} — fase 5. */
     public function terminos()

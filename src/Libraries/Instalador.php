@@ -326,6 +326,44 @@ class Instalador
         ]];
     }
 
+    /**
+     * Fase 6d: la cuenta de Recargas IA (streamy) del robot de una hija que se está instalando: así compra IA desde su
+     * panel sin pasos aparte. Solo con una instalación CON ROBOT en curso (canjeada) de esa hija. Se crea con las
+     * funciones del panel de streamy, se enlaza a la hija y la clave va UNA vez al instalador. [ok, mensaje, token]
+     */
+    public static function tiendaIa(array $hija): array
+    {
+        $db = Central::db();
+        $i = $db->table('instalaciones')->where('hija_id', (int) $hija['id'])->where('estado', 'canjeado')->where('con_chat', 1)
+            ->orderBy('id', 'DESC')->get()->getRowArray();
+        if (! $i) {
+            return [false, 'No hay una instalación con Robot en curso para esta hija.', null];
+        }
+        // Reintento: la cuenta que creó un intento anterior de ESTA instalación se desactiva (su clave se fue con el robot borrado).
+        if (! empty($i['ia_cuenta_id'])) {
+            self::cuentaIa('desactivar', (string) (int) $i['ia_cuenta_id']);
+        }
+        $nombre = strtoupper(mb_substr((string) preg_replace('/[^A-Za-z0-9 _-]/', '', strtr((string) $hija['nombre'], ['(' => '', ')' => ''])), 0, 60));
+        $r = self::cuentaIa('crear', trim($nombre));
+        if (empty($r['ok']) || empty($r['token'])) {
+            return [false, (string) ($r['error'] ?? 'No pude crear la cuenta de Recargas IA.'), null];
+        }
+        $db->table('instalaciones')->where('id', (int) $i['id'])->update(['ia_cuenta_id' => (int) $r['id']]);
+        $db->table('hijas')->where('id', (int) $hija['id'])->update(['streamy_cuenta_id' => (int) $r['id']]);
+        return [true, 'Cuenta «' . $r['nombre'] . '» creada en Recargas IA.', (string) $r['token']];
+    }
+
+    /** Llama a herramientas/cuenta-ia.php (las funciones del panel de streamy) por consola. */
+    private static function cuentaIa(string $accion, string $arg): array
+    {
+        $dir = (string) (Central::cfg()['streamy_dir'] ?? '/var/www/streamy-v2');
+        $php = is_executable('/usr/bin/php') ? '/usr/bin/php' : 'php';
+        $cmd = 'timeout 40 ' . $php . ' ' . escapeshellarg(dirname(__DIR__, 2) . '/herramientas/cuenta-ia.php') . ' '
+            . escapeshellarg($dir) . ' ' . escapeshellarg($accion) . ' ' . escapeshellarg($arg) . ' 2>/dev/null';
+        $j = json_decode(trim((string) shell_exec($cmd)), true);
+        return is_array($j) ? $j : ['ok' => false, 'error' => 'La tienda de IA (streamy) no respondió.'];
+    }
+
     /** El instalador avisa cómo terminó (con la llave recién canjeada). */
     public static function reportar(int $hijaId, bool $ok, string $mensaje, string $version): void
     {
@@ -338,6 +376,11 @@ class Instalador
             'estado' => $ok ? 'instalada' : 'fallo', 'mensaje' => mb_substr($mensaje, 0, 500), 'terminada_en' => date('Y-m-d H:i:s'),
             'version' => preg_match('/^\d+\.\d+\.\d+$/', $version) ? $version : $i['version'],
         ]);
+        // Falló: el robot se borró y su clave con él → la cuenta de Recargas IA que creó este intento se desactiva.
+        if (! $ok && ! empty($i['ia_cuenta_id'])) {
+            self::cuentaIa('desactivar', (string) (int) $i['ia_cuenta_id']);
+            $db->table('hijas')->where('id', $hijaId)->where('streamy_cuenta_id', (int) $i['ia_cuenta_id'])->update(['streamy_cuenta_id' => null]);
+        }
     }
 
     /** Última instalación de una hija, para la lista (o null). */

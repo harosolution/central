@@ -31,6 +31,7 @@ $routes->group('central', ['namespace' => 'Central\Controllers'], static functio
     $routes->get('instalar/(:segment)', 'Instalar::script/$1');
     $routes->post('api/instalar', 'Api::instalar');               // el instalador canjea el código por la llave
     $routes->post('api/instalacion', 'Api::instalacionTerminada'); // y avisa cómo terminó
+    $routes->post('api/tienda-ia', 'Api::tiendaIa');               // fase 6d: cuenta de Recargas IA del robot que se instala
 
     // Panel: sesión del CRM + super_admin de la madre (lo revisa el controlador).
     $f = ['filter' => 'adminauth'];
