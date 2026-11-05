@@ -120,6 +120,7 @@ $porActualizar = array_values(array_filter($hijas, static fn ($h) => (int) $h['a
                 <?= csrf_field() ?>
                 <label class="ce-lbl">Dominio del chat (el robot va en /tecnobot/)<input class="ce-in" name="dominio_chat" maxlength="120" placeholder="<?= esc($h['dominio'] !== '' ? \Central\Libraries\Instalador::dominioChat($h['dominio']) : 'chat.empresa.com') ?>" value="<?= esc(($ic['tipo'] ?? '') === 'chat' ? $ic['dominio_chat'] : '') ?>"></label>
                 <label class="ce-lbl">Nombre de la vendedora IA<input class="ce-in" name="nombre_robot" maxlength="40" placeholder="Asistente" value="<?= esc(($ic['tipo'] ?? '') === 'chat' ? $ic['nombre_robot'] : '') ?>"></label>
+                <label class="text-xs flex items-center gap-2" title="Para auditar y configurar el robot desde Claude (solo edita su borrador). La clave va a nombre del administrador."><input type="checkbox" name="con_conector" value="1" <?= ($ic['tipo'] ?? '') !== 'chat' || (int) ($ic['con_conector'] ?? 1) === 1 ? 'checked' : '' ?>> Con conector de Claude</label>
                 <div class="text-xs text-[#9CA3AF]">Para una hija ya instalada con el instalador de una línea. El comando se pega en SU servidor (usa la llave de su agente) y no toca sus ventas ni su CRM, salvo el enlace con el chat. El dominio del chat debe apuntar a ese servidor.</div>
                 <button class="ce-btn bg-[#22C55E] text-[#0B1220]">Crear comando</button>
               </form>
@@ -136,6 +137,7 @@ $porActualizar = array_values(array_filter($hijas, static fn ($h) => (int) $h['a
                 <label class="text-xs flex items-center gap-2"><input type="checkbox" name="con_chat" value="1" <?= ! $in || (int) ($in['con_chat'] ?? 1) === 1 ? 'checked' : '' ?>> Instalar también Chat y Robot</label>
                 <label class="ce-lbl">Dominio del chat (el robot va en /tecnobot/)<input class="ce-in" name="dominio_chat" maxlength="120" placeholder="<?= esc($h['dominio'] !== '' ? \Central\Libraries\Instalador::dominioChat($h['dominio']) : 'chat.empresa.com') ?>" value="<?= esc($in['dominio_chat'] ?? '') ?>"></label>
                 <label class="ce-lbl">Nombre de la vendedora IA<input class="ce-in" name="nombre_robot" maxlength="40" placeholder="Asistente" value="<?= esc($in['nombre_robot'] ?? '') ?>"></label>
+                <label class="text-xs flex items-center gap-2" title="Va con el Robot. Para auditar y configurar el robot desde Claude (solo edita su borrador). La clave va a nombre del administrador."><input type="checkbox" name="con_conector" value="1" <?= ! $in || (int) ($in['con_conector'] ?? 1) === 1 ? 'checked' : '' ?>> Con conector de Claude</label>
                 <div class="text-xs text-[#9CA3AF]">Dominio del CRM: <b><?= esc($h['dominio'] !== '' ? $h['dominio'] : 'falta: ponlo en Editar') ?></b>. Los dos dominios deben apuntar al servidor. Te doy un comando de una línea que vale 48 h.</div>
                 <button class="ce-btn bg-[#22C55E] text-[#0B1220]">Crear instalador</button>
               </form>

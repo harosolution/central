@@ -12,6 +12,7 @@
 #    --sin-apache     no crea el sitio web (la prueba usa el servidor de PHP)
 #    --sin-ssl        no pide el certificado (queda por http)
 #    --sin-chat       solo el CRM, aunque el instalador traiga Chat y Robot
+#    --sin-conector   sin el conector de Claude, aunque el instalador lo traiga (se puede poner después)
 #
 #  Qué hace: revisa el servidor → canjea el código (la central le da a la hija su llave) → baja el CRM y comprueba
 #  la firma de la madre → base y usuario propios (estructura + roles y catálogos genéricos) → .env con secretos
@@ -51,6 +52,9 @@ CREADO_CHAT=0; CREADO_ROBOT=0; CREADO_SITIO_CHAT=0; CREADO_UNIDADES=0
 # Fase 6c: MODO=agregar = poner Chat y Robot a una hija YA instalada (su CRM no se toca, salvo el enlace con el chat).
 MODO='__MODO__'; DBUSER=''; ENV_RESPALDO=''; JSON_RESPALDO=''
 TIENDA_OK=0   # fase 6d: el robot recibió su clave de la Tienda IA (Recargas IA de streamy)
+# Fase 7b (5-nov-2026, Joe): el conector de Claude (MCP) del robot, como casilla del instalador. Es lo ÚLTIMO que se pone y
+# no es obligatorio: si no se puede, la instalación igual termina bien y queda el comando para ponerlo después.
+CON_CONECTOR='__CON_CONECTOR__'; CONECTOR_OK=0; CONECTOR_NOMBRE='admin'
 
 paso(){ printf '\n\033[1m%s\033[0m\n' "$*"; printf '\n== %s\n' "$*" >>"$LOG"; }
 log(){ printf '   %s\n' "$*"; printf '%s %s\n' "$(date +%T)" "$*" >>"$LOG"; }
@@ -1034,6 +1038,36 @@ agente_agregar(){
   rm -f "$JSON_RESPALDO"; JSON_RESPALDO=''
 }
 
+# Fase 7b: el conector de Claude (puerta aparte con Camila apagada que edita SOLO el borrador del robot). Lo pone el mismo
+# ayudante de siempre (poner-conector.sh), que si falla deshace lo suyo; aquí no detiene la instalación.
+conector(){
+  [ "$CON_CHAT" = 1 ] && [ "$CON_CONECTOR" = 1 ] || return 0
+  paso "Conector de Claude (MCP) del robot"
+  [ -f "$AGENTE_DIR/poner-conector.sh" ] || { aviso "No tengo el ayudante del conector: queda para después."; return 0; }
+  # La clave va a nombre del administrador (una por persona; el registro dice quién cambió qué). Joe agrega la suya con --nombre.
+  local n
+  n="$(printf '%s' "${ADMIN_NOMBRE%% *}" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null | tr -cd 'A-Za-z0-9_-' | cut -c1-30 || true)"
+  CONECTOR_NOMBRE="${n:-admin}"
+  if bash "$AGENTE_DIR/poner-conector.sh" "$HIJA" --nombre "$CONECTOR_NOMBRE" </dev/null >>"$LOG" 2>&1; then
+    CONECTOR_OK=1
+    log "conector de Claude listo en $DOMINIO_CHAT/claude/tecnobot/mcp (clave a nombre de «$CONECTOR_NOMBRE»)"
+  else
+    aviso "No se pudo poner el conector de Claude (ver $LOG). La instalación sigue bien. Para ponerlo después:  sudo bash $AGENTE_DIR/poner-conector.sh $HIJA"
+  fi
+}
+
+resumen_conector(){
+  [ "$CON_CHAT" = 1 ] || return 0
+  if [ "$CONECTOR_OK" = 1 ]; then
+    printf '\n  Conector de Claude: https://%s/claude/tecnobot/mcp   (Claude → Configuración → Conectores → Agregar personalizado)\n' "$DOMINIO_CHAT"
+    printf '             Clave de «%s» (no la pegues en ningún chat):  sudo grep '"'"'^CONECTOR_CLAVES'"'"' /var/www/%s-conector/tecnobot/.env\n' "$CONECTOR_NOMBRE" "$HIJA"
+    printf '             Solo edita el BORRADOR del robot; se publica en su panel. Otra persona:  sudo bash %s/poner-conector.sh %s --nombre Joe\n' "$AGENTE_DIR" "$HIJA"
+    [ "$ESQUEMA_CHAT" = https ] || printf '             (Claude solo conecta por https: funciona apenas esté el SSL del chat.)\n'
+  elif [ "$CON_CONECTOR" = 1 ]; then
+    printf '\n  Conector de Claude: NO quedó puesto. Para ponerlo:  sudo bash %s/poner-conector.sh %s\n' "$AGENTE_DIR" "$HIJA"
+  fi
+}
+
 resumen_chat(){
   printf '\n  Chat:      %s://%s/   (usuario admin; desde el CRM entra sin clave)\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT"
   printf '             WhatsApp SIN vincular: escanea el QR en %s://%s/admin con el celular de la empresa.\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT"
@@ -1057,6 +1091,7 @@ resumen_agregar(){
   resumen_chat
   printf '\n  Clave del usuario admin del CHAT: %s\n' "$CLAVE"
   printf '             ↑ solo para entrar al chat directo; anótala. No se vuelve a mostrar.\n'
+  resumen_conector
   printf '\n  El CRM quedó enlazado (respaldo de su .env: %s).\n' "$(basename "$ENV_RESPALDO")"
   printf '  Registro (sin claves): %s\n' "$LOG"
   printf '  Pendiente en el Robot: productos, medios de pago y encenderlo.\n'
@@ -1075,13 +1110,16 @@ agregar_main(){
   bajar_pieza robot "$VERSION_ROBOT" "$TMP/robot.tgz"
   chat_robot
   agente_agregar
+  conector
   TERMINADO=1
   reportar true "Chat y Robot agregados en $(hostname) · $ESQUEMA_CHAT://$DOMINIO_CHAT"
   resumen_agregar
 }
 
-# Los ayudantes de la hija (SSL y Tienda IA). Se escriben siempre: así una hija vieja recibe la versión nueva.
+# Los ayudantes de la hija (SSL, Tienda IA y conector de Claude). Se escriben siempre: así una hija vieja recibe la versión nueva.
 poner_ayudantes(){
+  printf '%s' '__CONECTOR_B64__' | base64 -d >"$AGENTE_DIR/poner-conector.sh" && chmod 700 "$AGENTE_DIR/poner-conector.sh"
+  bash -n "$AGENTE_DIR/poner-conector.sh" </dev/null 2>/dev/null || { rm -f "$AGENTE_DIR/poner-conector.sh"; aviso "El ayudante del conector de Claude llegó dañado: no lo dejo."; }
   # Ayudante para poner el SSL después: certbot + TODA la configuración a https (CRM y, si tiene, chat y robot).
   cat >"$AGENTE_DIR/poner-ssl.sh" <<'SSL'
 #!/usr/bin/env bash
@@ -1214,6 +1252,7 @@ resumen(){
     if [ "$ESQUEMA_CHAT" = http ]; then
       printf '\n  \033[33mOJO: sin https NO se puede entrar al chat ni al robot (su sesión es solo https). Pon el SSL apenas el dominio apunte.\033[0m\n'
     fi
+    resumen_conector
   fi
   if { [ "$ESQUEMA" = http ] || { [ "$CON_CHAT" = 1 ] && [ "$ESQUEMA_CHAT" = http ]; }; } && [ "$SIN_APACHE" = 0 ]; then
     printf '\n  Falta el SSL. Cuando %s, corre (pone el certificado Y pasa todo a https):\n' "$([ "$CON_CHAT" = 1 ] && echo "$DOMINIO y $DOMINIO_CHAT apunten a este servidor" || echo "$DOMINIO apunte a este servidor")"
@@ -1231,10 +1270,12 @@ instalar_main(){
       --sin-apache)   SIN_APACHE=1; shift;;
       --sin-ssl)      SIN_SSL=1; shift;;
       --sin-chat)     CON_CHAT=0; shift;;
-      *) die "Opción desconocida: $1 (valen --carpeta DIR, --sin-paquetes, --sin-apache, --sin-ssl, --sin-chat)";;
+      --sin-conector) CON_CONECTOR=0; shift;;
+      *) die "Opción desconocida: $1 (valen --carpeta DIR, --sin-paquetes, --sin-apache, --sin-ssl, --sin-chat, --sin-conector)";;
     esac
   done
   [ "$CON_CHAT" = 1 ] || CON_CHAT=0
+  [ "$CON_CONECTOR" = 1 ] || CON_CONECTOR=0
   if [ "$CON_CHAT" = 1 ] && [ "$SIN_APACHE" = 1 ]; then
     printf 'AVISO: el Chat y el Robot necesitan Apache; con --sin-apache se instala solo el CRM.\n'
     CON_CHAT=0
@@ -1268,6 +1309,7 @@ instalar_main(){
   [ "$CON_CHAT" = 1 ] || https_del_proxy
   chat_robot
   agente
+  conector
   TERMINADO=1
   reportar true "Instalada en $(hostname) · $CARPETA · CRM $VERSION · $ESQUEMA://$DOMINIO$([ "$CON_CHAT" = 1 ] && echo " · Chat y Robot en $ESQUEMA_CHAT://$DOMINIO_CHAT")"
   resumen

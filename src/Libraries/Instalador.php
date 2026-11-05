@@ -111,8 +111,9 @@ class Instalador
             'estado' => 'pendiente', 'version' => (string) self::limpiaVer($lat['crm_ver']), 'por' => mb_substr($por, 0, 30),
             'creada_en' => date('Y-m-d H:i:s', $ahora), 'vence_en' => date('Y-m-d H:i:s', $ahora + self::VIGENCIA_H * 3600),
             'con_chat' => 1, 'dominio_chat' => $domChat, 'nombre_robot' => $nombreRobot,
+            'con_conector' => ! empty($d['con_conector']) ? 1 : 0,   // fase 7b
         ]);
-        return [true, "Comando para agregar Chat $vChat y Robot $vRobot a «{$h['nombre']}» en $domChat. Vale " . self::VIGENCIA_H . ' horas.', $codigo];
+        return [true, "Comando para agregar Chat $vChat y Robot $vRobot" . (! empty($d['con_conector']) ? ' (con conector de Claude)' : '') . " a «{$h['nombre']}» en $domChat. Vale " . self::VIGENCIA_H . ' horas.', $codigo];
     }
 
     private static function limpiaVer($v): string
@@ -188,8 +189,10 @@ class Instalador
             'admin_email' => $email, 'estado' => 'pendiente', 'version' => $ver, 'por' => mb_substr($por, 0, 30),
             'creada_en' => date('Y-m-d H:i:s', $ahora), 'vence_en' => date('Y-m-d H:i:s', $ahora + self::VIGENCIA_H * 3600),
             'con_chat' => $conChat ? 1 : 0, 'dominio_chat' => $domChat, 'nombre_robot' => $nombreRobot,
+            'con_conector' => $conChat && ! empty($d['con_conector']) ? 1 : 0,   // fase 7b: el conector de Claude (va con el Robot)
         ]);
-        $que = $conChat ? "CRM $ver + Chat " . self::versionInstalable('chat') . ' y Robot ' . self::versionInstalable('robot') . " en $domChat" : "CRM $ver";
+        $que = $conChat ? "CRM $ver + Chat " . self::versionInstalable('chat') . ' y Robot ' . self::versionInstalable('robot')
+            . (! empty($d['con_conector']) ? ' con conector de Claude' : '') . " en $domChat" : "CRM $ver";
         return [true, "Instalador de «{$h['nombre']}» listo ($que). Vale " . self::VIGENCIA_H . ' horas.', $codigo];
     }
 
@@ -225,10 +228,11 @@ class Instalador
         $tpl = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/instalar.sh');
         $latido = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/latido.php');
         $actualizar = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/actualizar.php');
+        $conector = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/poner-conector.sh');   // fase 7b
         if (! $v) {
             return self::scriptError('Este código de instalación no existe, ya se usó o venció (duran ' . self::VIGENCIA_H . ' h). Pide uno nuevo en la central.');
         }
-        if ($ver === null || ! preg_match('/^[0-9a-f]{64}$/', $pk) || $tpl === '' || $latido === '' || $actualizar === '') {
+        if ($ver === null || ! preg_match('/^[0-9a-f]{64}$/', $pk) || $tpl === '' || $latido === '' || $actualizar === '' || $conector === '') {
             return self::scriptError('La central no tiene listo el paquete del CRM. Avísale a soporte.');
         }
         $conChat = (int) ($v['inst']['con_chat'] ?? 0) === 1;
@@ -241,6 +245,8 @@ class Instalador
         return strtr($tpl, [
             '__MODO__'            => $agregar ? 'agregar' : 'nueva',
             '__CON_CHAT__'        => $conChat ? '1' : '0',
+            '__CON_CONECTOR__'    => $conChat && (int) ($v['inst']['con_conector'] ?? 0) === 1 ? '1' : '0',
+            '__CONECTOR_B64__'    => base64_encode($conector),
             '__DOMINIO_CHAT__'    => $conChat ? (string) $v['inst']['dominio_chat'] : '',
             '__VERSION_CHAT__'    => (string) $vChat,
             '__VERSION_ROBOT__'   => (string) $vRobot,
