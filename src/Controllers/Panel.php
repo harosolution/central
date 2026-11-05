@@ -165,6 +165,22 @@ class Panel extends Controller
         return $this->volver('hijas', $msg)->with('central_comando', Instalador::comando($codigo))->with('central_comando_de', (string) ($h['nombre'] ?? ''));
     }
 
+    /** Fase 6c: el comando para agregar Chat y Robot a una hija YA instalada (se muestra UNA vez). */
+    public function agregarChat(int $id)
+    {
+        if (! $this->permitido()) {
+            return $this->fuera();
+        }
+        $r = $this->request;
+        [$ok, $msg, $codigo] = Instalador::crearCodigoChat($id, ['dominio_chat' => (string) $r->getPost('dominio_chat'),
+            'nombre_robot' => (string) $r->getPost('nombre_robot')], 'joe');
+        if (! $ok) {
+            return $this->volver('hijas', null, $msg);
+        }
+        $h = Central::db()->table('hijas')->where('id', $id)->get()->getRowArray();
+        return $this->volver('hijas', $msg)->with('central_comando', Instalador::comando($codigo))->with('central_comando_de', (string) ($h['nombre'] ?? ''));
+    }
+
     // ── Planes, pagos, ajustes ──────────────────────────────────────────────
     public function plan(?int $id = null)
     {

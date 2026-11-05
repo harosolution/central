@@ -35,6 +35,7 @@ $cuentasIa = $cuentasIa ?? [];
                 if ($vencido) { $t = ['#9CA3AF', 'Instalador vencido el ' . $fecha($in['vence_en'])]; }
                 elseif ($in['estado'] === 'pendiente') { $t = ['#F59E0B', 'Instalador listo (CRM ' . $in['version'] . ') · vence ' . $fecha($in['vence_en'])]; }
                 elseif ($in['estado'] === 'canjeado') { $t = ['#F59E0B', '⏳ Instalando en ' . trim($in['servidor'] . ' ' . $in['ip']) . ' desde las ' . $fecha($in['canjeado_en'])]; }
+                elseif ($in['estado'] === 'instalada' && ($in['tipo'] ?? 'nueva') === 'chat') { $t = ['#22C55E', '✓ Chat y Robot agregados el ' . $fecha($in['terminada_en']) . ' en ' . $in['dominio_chat']]; }
                 elseif ($in['estado'] === 'instalada') { $t = ['#22C55E', '✓ Instalada el ' . $fecha($in['terminada_en']) . ' en ' . trim($in['servidor'] . ' ' . $in['ip']) . ' (CRM ' . $in['version'] . ((int) ($in['con_chat'] ?? 0) === 1 ? ' + Chat y Robot en ' . $in['dominio_chat'] : '') . ')']; }
                 else { $t = ['#EF4444', '✗ La instalación falló (' . $fecha($in['terminada_en']) . '): ' . $in['mensaje'] . ' — se puede volver a correr']; } ?>
               <div class="text-xs mt-1" style="color:<?= $t[0] ?>"><?= esc($t[1]) ?></div>
@@ -98,6 +99,18 @@ $cuentasIa = $cuentasIa ?? [];
                 <button class="ce-btn bg-[#374151] text-white">Llave nueva</button>
               </form>
             </details>
+            <?php if (\Central\Libraries\Instalador::ofrecerChat($h)): $ic = $h['instalacion'] ?? []; ?>
+            <details class="ce-edit mt-2">
+              <summary>Agregar Chat y Robot</summary>
+              <form method="post" action="<?= $central ?>/hijas/<?= (int) $h['id'] ?>/agregar-chat" class="space-y-2 mt-2">
+                <?= csrf_field() ?>
+                <label class="ce-lbl">Dominio del chat (el robot va en /tecnobot/)<input class="ce-in" name="dominio_chat" maxlength="120" placeholder="<?= esc($h['dominio'] !== '' ? \Central\Libraries\Instalador::dominioChat($h['dominio']) : 'chat.empresa.com') ?>" value="<?= esc(($ic['tipo'] ?? '') === 'chat' ? $ic['dominio_chat'] : '') ?>"></label>
+                <label class="ce-lbl">Nombre de la vendedora IA<input class="ce-in" name="nombre_robot" maxlength="40" placeholder="Asistente" value="<?= esc(($ic['tipo'] ?? '') === 'chat' ? $ic['nombre_robot'] : '') ?>"></label>
+                <div class="text-xs text-[#9CA3AF]">Para una hija ya instalada con el instalador de una línea. El comando se pega en SU servidor (usa la llave de su agente) y no toca sus ventas ni su CRM, salvo el enlace con el chat. El dominio del chat debe apuntar a ese servidor.</div>
+                <button class="ce-btn bg-[#22C55E] text-[#0B1220]">Crear comando</button>
+              </form>
+            </details>
+            <?php endif; ?>
             <?php if (\Central\Libraries\Instalador::ofrecer($h)): $in = $h['instalacion'] ?? []; ?>
             <details class="ce-edit mt-2">
               <summary>Instalar en un servidor nuevo</summary>

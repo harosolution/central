@@ -206,7 +206,9 @@ class Api extends Controller
     {
         $b = $this->request->getJSON(true);
         $b = is_array($b) ? $b : [];
-        [$ok, $msg, $datos] = Instalador::canjear((string) ($b['codigo'] ?? ''), (string) ($b['servidor'] ?? ''), (string) $this->request->getIPAddress());
+        // Agregar Chat y Robot (fase 6c): el comando manda la llave del agente de la hija (Authorization), que se comprueba.
+        [$ok, $msg, $datos] = Instalador::canjear((string) ($b['codigo'] ?? ''), (string) ($b['servidor'] ?? ''), (string) $this->request->getIPAddress(),
+            $this->request->getHeaderLine('Authorization'));
         $this->response->setHeader('Cache-Control', 'no-store');
         return $this->response->setStatusCode($ok ? 200 : 422)->setJSON($ok ? ['ok' => true] + $datos : ['ok' => false, 'error' => $msg]);
     }

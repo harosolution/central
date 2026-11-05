@@ -48,6 +48,8 @@ NODE_VER='20.20.2'; NODE_BIN=''; RUN_USER='haro'; TIENDA_IA_URL='https://streamy
 CHAT_DIR=''; ROBOT_DIR=''; P_CHAT=''; P_ROBOT=''; SITIO_CHAT=''; UNIDAD_CHAT=''; UNIDAD_ROBOT=''
 NOMBRE_ROBOT=''; ESQUEMA_CHAT='http'; BOTKEY=''; CRM_KEY=''
 CREADO_CHAT=0; CREADO_ROBOT=0; CREADO_SITIO_CHAT=0; CREADO_UNIDADES=0
+# Fase 6c: MODO=agregar = poner Chat y Robot a una hija YA instalada (su CRM no se toca, salvo el enlace con el chat).
+MODO='__MODO__'; DBUSER=''; ENV_RESPALDO=''; JSON_RESPALDO=''
 
 paso(){ printf '\n\033[1m%s\033[0m\n' "$*"; printf '\n== %s\n' "$*" >>"$LOG"; }
 log(){ printf '   %s\n' "$*"; printf '%s %s\n' "$(date +%T)" "$*" >>"$LOG"; }
@@ -88,13 +90,29 @@ guardar_diagnostico(){
 # Si algo falla: se deshace TODO lo que este instalador creó (y nada más).
 al_salir(){
   local rc=$?
-  [ -z "$TMP" ] || rm -rf "$TMP"
-  if [ "$rc" -eq 0 ] || [ "$TERMINADO" = 1 ]; then return 0; fi
+  if [ "$rc" -eq 0 ] || [ "$TERMINADO" = 1 ]; then [ -z "$TMP" ] || rm -rf "$TMP"; return 0; fi
   trap - ERR
   set +e
   [ -n "$MOTIVO" ] || MOTIVO="falló un paso (código $rc)"
-  [ "$CREADO_DIR" = 1 ] && guardar_diagnostico
+  { [ "$CREADO_DIR" = 1 ] || [ "$CREADO_CHAT" = 1 ]; } && guardar_diagnostico
   printf '\nDeshaciendo lo que alcancé a crear…\n'
+  # Agregar Chat y Robot: el CRM vuelve EXACTO a como estaba (su .env y los dos ajustes del chat), y el agente también.
+  if [ -n "$ENV_RESPALDO" ] && [ -f "$ENV_RESPALDO" ]; then
+    cat "$ENV_RESPALDO" >"$CARPETA/.env" && rm -f "$ENV_RESPALDO" && echo "   .env del CRM devuelto a como estaba"
+  fi
+  if [ -n "$TMP" ] && [ -f "$TMP/ajustes-antes.json" ]; then
+    DB="$DB" ARCH="$TMP/ajustes-antes.json" php -r '
+      $a = json_decode(file_get_contents(getenv("ARCH")), true) ?: [];
+      $m = new mysqli("localhost", "root", "", getenv("DB"));
+      foreach (["chatbot_admin_url", "chatbot_sso_secret"] as $k) {
+        $kk = $m->real_escape_string($k);
+        if (array_key_exists($k, $a)) { $vv = $m->real_escape_string((string) $a[$k]); $m->query("UPDATE system_settings SET v = \x27$vv\x27 WHERE company_id = 1 AND k = \x27$kk\x27"); }
+        else { $m->query("DELETE FROM system_settings WHERE company_id = 1 AND k = \x27$kk\x27"); }
+      }' </dev/null >/dev/null 2>&1 && echo "   ajustes del chat en el CRM devueltos"
+  fi
+  if [ -n "$JSON_RESPALDO" ] && [ -f "$JSON_RESPALDO" ]; then
+    cat "$JSON_RESPALDO" >"$AGENTE_DIR/hijas/$HIJA.json" && rm -f "$JSON_RESPALDO"
+  fi
   if [ "$CREADO_UNIDADES" = 1 ]; then
     systemctl disable --now "$UNIDAD_CHAT" "$UNIDAD_ROBOT" >/dev/null 2>&1
     rm -f "/etc/systemd/system/$UNIDAD_CHAT.service" "/etc/systemd/system/$UNIDAD_ROBOT.service"
@@ -125,6 +143,7 @@ al_salir(){
   [ "$CREADO_AGENTE" = 1 ] && rm -f "$AGENTE_DIR/hijas/$HIJA.json"
   [ "$CREADO_CRON" = 1 ] && rm -f /etc/cron.d/haro-agente
   [ "$CREADO_AGENTE_DIR" = 1 ] && rm -rf "$AGENTE_DIR"
+  [ -z "$TMP" ] || rm -rf "$TMP"
   reportar false "$MOTIVO"
   printf '\nNo quedó nada a medias. Arregla lo de arriba y vuelve a pegar el MISMO comando (el código sigue sirviendo).\nDetalle: %s\n' "$LOG"
 }
@@ -283,21 +302,26 @@ nombres(){
   fi
   [ ! -e "$AGENTE_DIR/hijas/$HIJA.json" ] || die "Ya hay un agente para «$HIJA» en $AGENTE_DIR."
   log "carpeta $CARPETA · base $DB · sitio $SITIO"
-  if [ "$CON_CHAT" = 1 ]; then
-    [[ "$DOMINIO_CHAT" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]] && [ "$DOMINIO_CHAT" != "$DOMINIO" ] || die "Dominio del chat inválido: $DOMINIO_CHAT"
-    [[ "$VERSION_CHAT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$VERSION_ROBOT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Versiones del Chat o del Robot inválidas."
-    CHAT_DIR="/var/www/$HIJA-chat"; ROBOT_DIR="/var/www/$HIJA-robot"
-    UNIDAD_CHAT="haro-$HIJA-chat"; UNIDAD_ROBOT="haro-$HIJA-robot"; SITIO_CHAT="haro-$HIJA-chat"
-    local x
-    for x in "$CHAT_DIR" "$ROBOT_DIR" "/etc/systemd/system/$UNIDAD_CHAT.service" "/etc/systemd/system/$UNIDAD_ROBOT.service" \
-             "/etc/apache2/sites-available/$SITIO_CHAT.conf"; do
-      [ ! -e "$x" ] || die "Ya existe $x. No piso nada."
-    done
-    ! grep -qiE "(namevhost|alias) ${DOMINIO_CHAT//./\\.}( |$)" <<<"$vh" || die "Apache ya tiene un sitio con el dominio $DOMINIO_CHAT."
-    P_CHAT="$(puerto_libre 3200)"
-    P_ROBOT="$(puerto_libre $((P_CHAT + 1)) "$P_CHAT")"
-    log "chat $CHAT_DIR (puerto $P_CHAT) · robot $ROBOT_DIR (puerto $P_ROBOT) · sitio $SITIO_CHAT para $DOMINIO_CHAT"
-  fi
+  [ "$CON_CHAT" = 1 ] && nombres_chat
+  return 0
+}
+
+# Que no exista nada del Chat y el Robot de esta hija; elige sus puertos.
+nombres_chat(){
+  local x vh
+  [[ "$DOMINIO_CHAT" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]] && [ "$DOMINIO_CHAT" != "$DOMINIO" ] || die "Dominio del chat inválido: $DOMINIO_CHAT"
+  [[ "$VERSION_CHAT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$VERSION_ROBOT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Versiones del Chat o del Robot inválidas."
+  CHAT_DIR="/var/www/$HIJA-chat"; ROBOT_DIR="/var/www/$HIJA-robot"
+  UNIDAD_CHAT="haro-$HIJA-chat"; UNIDAD_ROBOT="haro-$HIJA-robot"; SITIO_CHAT="haro-$HIJA-chat"
+  for x in "$CHAT_DIR" "$ROBOT_DIR" "/etc/systemd/system/$UNIDAD_CHAT.service" "/etc/systemd/system/$UNIDAD_ROBOT.service" \
+           "/etc/apache2/sites-available/$SITIO_CHAT.conf"; do
+    [ ! -e "$x" ] || die "Ya existe $x. No piso nada."
+  done
+  vh="$(apache2ctl -S 2>/dev/null || true)"
+  ! grep -qiE "(namevhost|alias) ${DOMINIO_CHAT//./\\.}( |$)" <<<"$vh" || die "Apache ya tiene un sitio con el dominio $DOMINIO_CHAT."
+  P_CHAT="$(puerto_libre 3200)"
+  P_ROBOT="$(puerto_libre $((P_CHAT + 1)) "$P_CHAT")"
+  log "chat $CHAT_DIR (puerto $P_CHAT) · robot $ROBOT_DIR (puerto $P_ROBOT) · sitio $SITIO_CHAT para $DOMINIO_CHAT"
 }
 
 # Primer puerto libre desde $1 (sin repetir $2), mirando lo que escucha y lo que ya tienen asignado las otras hijas.
@@ -813,12 +837,27 @@ EOF
   [ "$cod" = 200 ] || die "El chat no responde por $chat_url (HTTP $cod)."
 
   # Enlace con el CRM: entrar al chat desde el CRM (SSO), mandar WhatsApp desde el CRM y la barra CRM · Chat · Robot.
+  if [ "$MODO" = agregar ]; then
+    # Hija ya instalada: respaldo EXACTO de lo que se toca (si algo falla, al_salir lo devuelve).
+    ENV_RESPALDO="$CARPETA/.env.antes-chat-$(date +%Y%m%d%H%M%S)"
+    cp -a "$CARPETA/.env" "$ENV_RESPALDO"
+    DB="$DB" php -r '
+      $m = new mysqli("localhost", "root", "", getenv("DB"));
+      $a = [];
+      foreach ($m->query("SELECT k, v FROM system_settings WHERE company_id = 1 AND k IN (\x27chatbot_admin_url\x27, \x27chatbot_sso_secret\x27)") as $r) { $a[$r["k"]] = $r["v"]; }
+      echo json_encode($a);' </dev/null >"$TMP/ajustes-antes.json" || die "No pude respaldar los ajustes del CRM."
+    # Si el CRM ya va por https y su .env todavía dice http (SSL puesto a mano), se corrige aquí.
+    if [ "$ESQUEMA" = https ] && grep -qE "^app\.baseURL[[:space:]]*=[[:space:]]*'?http://" "$CARPETA/.env"; then
+      sed -i -E "s#^app\.baseURL[[:space:]]*=.*#app.baseURL = 'https://$DOMINIO/'#; s#^crm\.urlPrincipal[[:space:]]*=.*#crm.urlPrincipal = 'https://$DOMINIO'#" "$CARPETA/.env"
+      log ".env del CRM pasado a https (el certificado ya estaba puesto)"
+    fi
+  fi
   env_poner "$CARPETA/.env" chatbot.adminUrl "'$chat_url'"
   env_poner "$CARPETA/.env" chatbot.localUrl "'http://127.0.0.1:$P_CHAT'"
   env_poner "$CARPETA/.env" chatbot.ssoSecret "$CRM_KEY"
-  DB="$DB" DBPASS="$DBPASS" URL="$chat_url" SSO="$CRM_KEY" php -r '
+  DB="$DB" DBUSER="${DBUSER:-$DB}" DBPASS="$DBPASS" URL="$chat_url" SSO="$CRM_KEY" php -r '
     mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-    $m = new mysqli("localhost", getenv("DB"), getenv("DBPASS"), getenv("DB"));
+    $m = new mysqli("localhost", getenv("DBUSER"), getenv("DBPASS"), getenv("DB"));
     $st = $m->prepare("INSERT INTO system_settings (company_id, k, v) VALUES (1, ?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)");
     foreach (["chatbot_admin_url" => getenv("URL"), "chatbot_sso_secret" => getenv("SSO")] as $k => $v) { $st->bind_param("ss", $k, $v); $st->execute(); }
   ' </dev/null >>"$LOG" 2>&1 || die "No pude enlazar el CRM con el chat (ver $LOG)."
@@ -843,14 +882,126 @@ poner_agente(){   # $1 = latido | actualizar   $2 = el archivo en base64
   chmod 600 "$dst"
 }
 
-agente(){
-  paso "Agente de la central (latido cada 10 min)"
+# ── Modo «agregar» (fase 6c): Chat y Robot a una hija YA instalada ───────────────────────────────────────────────────
+# Lee lo que ya tiene la hija: su agente (llave), su CRM (.env, base) y si el CRM ya va por https.
+leer_hija(){
+  paso "2/6  Leyendo la hija instalada «$HIJA»"
+  local f="$AGENTE_DIR/hijas/$HIJA.json" dom cod
+  [ -f "$f" ] || die "No encuentro el agente de «$HIJA» en $AGENTE_DIR: este comando es para el servidor de esa hija (instalada con el instalador de una línea)."
+  jf(){ php -r '$j = json_decode(file_get_contents($argv[1]), true); echo is_array($j) ? ($j[$argv[2]] ?? "") : "";' "$f" "$1" </dev/null; }
+  [ -z "$(jf chat)" ] || die "«$HIJA» ya tiene Chat ($(jf chat))."
+  LLAVE="$(jf llave)"; CARPETA="$(jf crm)"; dom="$(jf dominio)"
+  [[ "$LLAVE" =~ ^hc_[0-9a-f]{48}$ ]] || { LLAVE=''; die "El agente de «$HIJA» no tiene una llave válida."; }
+  [ "$dom" = "$DOMINIO" ] || { LLAVE=''; die "El agente dice que el dominio es $dom y la central dice $DOMINIO."; }
+  [ -f "$CARPETA/.env" ] || { LLAVE=''; die "No encuentro el CRM de «$HIJA» ($CARPETA)."; }
+  ev(){ grep -E "^[[:space:]]*$1[[:space:]]*=" "$CARPETA/.env" | tail -1 | sed -E "s/^[^=]*=[[:space:]]*//; s/^['\"]//; s/['\"][[:space:]]*$//" || true; }
+  DB="$(ev 'database\.default\.database')"; DBUSER="$(ev 'database\.default\.username')"; DBPASS="$(ev 'database\.default\.password')"
+  BOTKEY="$(ev BOT_API_KEY)"
+  [ -n "$DB" ] && [ -n "$DBUSER" ] && [ -n "$BOTKEY" ] || { LLAVE=''; die "Al .env del CRM le falta la base o BOT_API_KEY."; }
+  EMPRESA="$(mysql -N "$DB" -e "SELECT COALESCE(NULLIF((SELECT v FROM system_settings WHERE company_id = 1 AND k = 'business_name'), ''), (SELECT name FROM companies WHERE id = 1))" </dev/null 2>/dev/null || true)"
+  EMPRESA="${EMPRESA:-$HIJA}"
+  ADMIN_EMAIL="$(mysql -N "$DB" -e "SELECT u.email FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'super_admin' AND u.company_id = 1 AND u.is_active = 1 ORDER BY u.id LIMIT 1" </dev/null 2>/dev/null || true)"
+  [ -n "$ADMIN_EMAIL" ] || { LLAVE=''; die "El CRM no tiene un super_admin activo para enlazarlo al chat."; }
+  # El .env puede decir http aunque el certificado ya esté puesto (SSL a mano): se mira el sitio de verdad, con el
+  # certificado VALIDADO para este dominio (sin -k: en un servidor con varios sitios respondería el de otro).
+  cod="$(curl -s -o /dev/null -m 15 --resolve "$DOMINIO:443:127.0.0.1" -w '%{http_code}' "https://$DOMINIO/admin/" </dev/null || true)"
+  if [[ "$cod" =~ ^(200|301|302)$ ]]; then ESQUEMA=https; else ESQUEMA=http; fi
+  CLAVE="$(openssl rand -base64 30 | tr -dc 'A-Za-z0-9' | cut -c1-14)"   # la del usuario admin del CHAT (desde el CRM entra sin clave)
+  log "CRM $CARPETA ($ESQUEMA://$DOMINIO) · base $DB · empresa «$EMPRESA» · administrador $ADMIN_EMAIL"
+}
+
+# Pide a la central el permiso (el código + la llave del agente de ESTA hija). La llave NO cambia.
+canjear_chat(){
+  paso "3/6  Pidiendo a la central el permiso para agregar Chat y Robot"
+  local host resp code v
+  host="$(hostname -f 2>/dev/null || hostname)"
+  host="$(printf '%s' "$host" | tr -cd 'A-Za-z0-9._-')"
+  resp="$(curl -sS -m 30 -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' -H "Authorization: Bearer $LLAVE" \
+          --data "{\"codigo\":\"$CODIGO\",\"servidor\":\"$host\"}" "$CENTRAL/api/instalar" </dev/null 2>>"$LOG")" \
+    || die "No pude conectar con la central ($CENTRAL)."
+  code="${resp##*$'\n'}"
+  resp="${resp%$'\n'*}"
+  if [ "$code" != 200 ] || [ "$(jcampo "$resp" ok)" != 1 ]; then
+    die "La central no aceptó el comando: $(jcampo "$resp" error) (HTTP $code)"
+  fi
+  [ "$(jcampo "$resp" tipo)" = chat ] || die "Este código no es para agregar Chat y Robot."
+  [ "$(jcampo "$resp" hija)" = "$HIJA" ] || die "La central respondió con otra hija."
+  NOMBRE_ROBOT="$(jcampo "$resp" nombre_robot)"; NOMBRE_ROBOT="${NOMBRE_ROBOT:-Asistente}"
+  v="$(jcampo "$resp" version_chat)"; [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && VERSION_CHAT="$v"
+  v="$(jcampo "$resp" version_robot)"; [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && VERSION_ROBOT="$v"
+  IP_VISTA="$(jcampo "$resp" ip)"
+  log "permiso OK · Chat $VERSION_CHAT · Robot $VERSION_ROBOT («$NOMBRE_ROBOT») · la central ve a este servidor como ${IP_VISTA:-?}"
+}
+
+# El agente de la hija ahora también conoce el Chat y el Robot (el latido informa sus versiones).
+agente_agregar(){
+  paso "Agente de la central"
   local salida
-  if [ ! -d "$AGENTE_DIR" ]; then CREADO_AGENTE_DIR=1; fi
-  mkdir -p "$AGENTE_DIR/hijas"
-  chmod 700 "$AGENTE_DIR" "$AGENTE_DIR/hijas"
+  JSON_RESPALDO="$AGENTE_DIR/hijas/.$HIJA.json.antes-chat"
+  cp -a "$AGENTE_DIR/hijas/$HIJA.json" "$JSON_RESPALDO"
   poner_agente latido '__LATIDO_B64__'
   poner_agente actualizar '__ACTUALIZAR_B64__'
+  poner_ayudantes
+  F="$AGENTE_DIR/hijas/$HIJA.json" CHAT_DIR="$CHAT_DIR" ROBOT_DIR="$ROBOT_DIR" DOMINIO_CHAT="$DOMINIO_CHAT" UC="$UNIDAD_CHAT" UR="$UNIDAD_ROBOT" php -r '
+    $f = getenv("F"); $j = json_decode(file_get_contents($f), true);
+    if (! is_array($j)) { exit(1); }
+    $j += ["chat" => getenv("CHAT_DIR"), "robot" => getenv("ROBOT_DIR"), "chat_dominio" => getenv("DOMINIO_CHAT"),
+      "chat_servicio" => getenv("UC"), "robot_servicio" => getenv("UR")];
+    file_put_contents($f, json_encode($j, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+  ' </dev/null || die "No pude actualizar el agente."
+  chmod 600 "$AGENTE_DIR/hijas/$HIJA.json"
+  salida="$(php "$AGENTE_DIR/latido.php" -v </dev/null 2>&1 || true)"
+  printf '%s\n' "$salida" >>"$LOG"
+  grep -q "^\[$HIJA\] OK" <<<"$salida" || die "El latido no llegó a la central: $(grep "\[$HIJA\]" <<<"$salida" | head -1 || true)"
+  log "latido con Chat $VERSION_CHAT y Robot $VERSION_ROBOT recibido por la central"
+  probar_fallo fin
+  rm -f "$JSON_RESPALDO"; JSON_RESPALDO=''
+}
+
+resumen_chat(){
+  printf '\n  Chat:      %s://%s/   (usuario admin; desde el CRM entra sin clave)\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT"
+  printf '             WhatsApp SIN vincular: escanea el QR en %s://%s/admin con el celular de la empresa.\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT"
+  printf '  Robot:     %s://%s/tecnobot/   «%s», APAGADO y sin key de IA.\n' "$ESQUEMA_CHAT" "$DOMINIO_CHAT" "$NOMBRE_ROBOT"
+  printf '             Para que compre IA: crea su token en streamy (Recargas IA → Crear cuenta y clave) y corre\n'
+  printf '                 sudo bash %s/poner-tienda-ia.sh %s ria_…\n' "$AGENTE_DIR" "$HIJA"
+  printf '  Servicios: %s (puerto %s) · %s (puerto %s), como el usuario %s\n' "$UNIDAD_CHAT" "$P_CHAT" "$UNIDAD_ROBOT" "$P_ROBOT" "$RUN_USER"
+  if [ "$ESQUEMA_CHAT" = http ]; then
+    printf '\n  \033[33mOJO: sin https NO se puede entrar al chat ni al robot (su sesión es solo https). Cuando %s apunte aquí:\033[0m\n' "$DOMINIO_CHAT"
+    printf '      sudo bash %s/poner-ssl.sh %s\n' "$AGENTE_DIR" "$HIJA"
+  fi
+}
+
+resumen_agregar(){
+  printf '\n\033[1;32m====================================================================\033[0m\n'
+  printf '  Chat y Robot agregados a «%s»\n' "$EMPRESA"
+  resumen_chat
+  printf '\n  Clave del usuario admin del CHAT: %s\n' "$CLAVE"
+  printf '             ↑ solo para entrar al chat directo; anótala. No se vuelve a mostrar.\n'
+  printf '\n  El CRM quedó enlazado (respaldo de su .env: %s).\n' "$(basename "$ENV_RESPALDO")"
+  printf '  Registro (sin claves): %s\n' "$LOG"
+  printf '  Pendiente en el Robot: productos, medios de pago y encenderlo.\n'
+  printf '\033[1;32m====================================================================\033[0m\n'
+}
+
+agregar_main(){
+  CON_CHAT=1
+  requisitos
+  leer_hija
+  paso "    Revisando que no exista nada del Chat y el Robot"
+  nombres_chat
+  canjear_chat
+  paso "4/6  Bajando Chat y Robot y comprobando la firma de la madre"
+  bajar_pieza chat "$VERSION_CHAT" "$TMP/chat.tgz"
+  bajar_pieza robot "$VERSION_ROBOT" "$TMP/robot.tgz"
+  chat_robot
+  agente_agregar
+  TERMINADO=1
+  reportar true "Chat y Robot agregados en $(hostname) · $ESQUEMA_CHAT://$DOMINIO_CHAT"
+  resumen_agregar
+}
+
+# Los ayudantes de la hija (SSL y Tienda IA). Se escriben siempre: así una hija vieja recibe la versión nueva.
+poner_ayudantes(){
   # Ayudante para poner el SSL después: certbot + TODA la configuración a https (CRM y, si tiene, chat y robot).
   cat >"$AGENTE_DIR/poner-ssl.sh" <<'SSL'
 #!/usr/bin/env bash
@@ -906,6 +1057,17 @@ systemctl restart "$UR"
 echo "Listo: el robot de $H ya puede comprar IA en la Tienda IA desde su panel."
 TIENDA
   chmod 700 "$AGENTE_DIR/poner-tienda-ia.sh"
+}
+
+agente(){
+  paso "Agente de la central (latido cada 10 min)"
+  local salida
+  if [ ! -d "$AGENTE_DIR" ]; then CREADO_AGENTE_DIR=1; fi
+  mkdir -p "$AGENTE_DIR/hijas"
+  chmod 700 "$AGENTE_DIR" "$AGENTE_DIR/hijas"
+  poner_agente latido '__LATIDO_B64__'
+  poner_agente actualizar '__ACTUALIZAR_B64__'
+  poner_ayudantes
   CENTRAL="$CENTRAL" LLAVE="$LLAVE" CARPETA="$CARPETA" DOMINIO="$DOMINIO" DUENO="$WEB_USER:$WEB_USER" CON_CHAT="$CON_CHAT" \
   CHAT_DIR="$CHAT_DIR" ROBOT_DIR="$ROBOT_DIR" DOMINIO_CHAT="$DOMINIO_CHAT" UC="$UNIDAD_CHAT" UR="$UNIDAD_ROBOT" php -r '
     $j = ["central" => getenv("CENTRAL"), "llave" => getenv("LLAVE"), "crm" => getenv("CARPETA"), "dominio" => getenv("DOMINIO"),
@@ -985,6 +1147,11 @@ instalar_main(){
   TMP="$(mktemp -d /tmp/haro-instalar.XXXXXX)"
   trap 'MOTIVO="${MOTIVO:-línea $LINENO: $BASH_COMMAND}"' ERR
   trap al_salir EXIT
+  if [ "$MODO" = agregar ]; then
+    printf '\n\033[1mHARO · agregando Chat %s y Robot %s a la hija «%s» en %s\033[0m\n' "$VERSION_CHAT" "$VERSION_ROBOT" "$HIJA" "$DOMINIO_CHAT"
+    agregar_main
+    return 0
+  fi
   printf '\n\033[1mHARO CRM · instalando la hija «%s» en %s (CRM %s%s)\033[0m\n' "$HIJA" "$DOMINIO" "$VERSION" \
     "$([ "$CON_CHAT" = 1 ] && echo " + Chat $VERSION_CHAT y Robot $VERSION_ROBOT en $DOMINIO_CHAT")"
   requisitos

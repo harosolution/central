@@ -69,6 +69,65 @@ class Instalador
         return trim((string) @file_get_contents(dirname(__DIR__, 2) . '/datos/firma.pk'));
     }
 
+    /**
+     * Agregar Chat y Robot a una hija YA instalada (con su agente vivo y sin chat). El código solo sirve en el
+     * servidor de esa hija: al canjearlo hay que mandar la llave que ya tiene su agente. NO le cambia la llave.
+     * [ok, mensaje, código]
+     */
+    public static function crearCodigoChat(int $hijaId, array $d, string $por = 'joe'): array
+    {
+        $db = Central::db();
+        $h = $db->table('hijas')->where('id', $hijaId)->get()->getRowArray();
+        if (! $h || (int) $h['activa'] !== 1) {
+            return [false, 'No existe esa hija o está de baja.', null];
+        }
+        $lat = $db->table('latidos')->where('hija_id', $hijaId)->get()->getRowArray();
+        if (! $lat || time() - strtotime((string) $lat['visto_en']) >= self::VIVA_SEG) {
+            return [false, 'Esa hija no está enviando señal: el Chat y el Robot se agregan a una hija instalada y viva.', null];
+        }
+        if (trim((string) $lat['chat_ver']) !== '' || trim((string) $lat['robot_ver']) !== '') {
+            return [false, 'Esa hija ya tiene Chat o Robot.', null];
+        }
+        $dom = strtolower(trim((string) $h['dominio']));
+        $domChat = mb_strtolower(trim((string) preg_replace('#^https?://#', '', rtrim((string) ($d['dominio_chat'] ?? ''), '/'))));
+        if ($domChat === '') {
+            $domChat = self::dominioChat($dom);
+        }
+        if (! preg_match('/^(?=.{4,120}$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/', $domChat) || $domChat === $dom) {
+            return [false, 'El dominio del chat no es válido (ej. chat.empresa.com) o es igual al del CRM.', null];
+        }
+        $nombreRobot = trim((string) preg_replace('/[^\p{L}\p{N} .\'-]/u', '', (string) ($d['nombre_robot'] ?? '')));
+        $nombreRobot = mb_substr($nombreRobot !== '' ? $nombreRobot : 'Asistente', 0, 40);
+        $vChat = self::versionInstalable('chat');
+        $vRobot = self::versionInstalable('robot');
+        if ($vChat === null || $vRobot === null) {
+            return [false, 'Faltan los paquetes del Chat o del Robot: ármalos con herramientas/empaquetar.php chat|robot X.Y.Z.', null];
+        }
+        $db->table('instalaciones')->where('hija_id', $hijaId)->whereIn('estado', ['pendiente', 'canjeado', 'fallo'])->update(['estado' => 'anulado']);
+        $codigo = 'hi_' . bin2hex(random_bytes(16));
+        $ahora = time();
+        $db->table('instalaciones')->insert([
+            'hija_id' => $hijaId, 'tipo' => 'chat', 'codigo_hash' => hash('sha256', $codigo), 'empresa' => (string) $h['nombre'],
+            'estado' => 'pendiente', 'version' => (string) self::limpiaVer($lat['crm_ver']), 'por' => mb_substr($por, 0, 30),
+            'creada_en' => date('Y-m-d H:i:s', $ahora), 'vence_en' => date('Y-m-d H:i:s', $ahora + self::VIGENCIA_H * 3600),
+            'con_chat' => 1, 'dominio_chat' => $domChat, 'nombre_robot' => $nombreRobot,
+        ]);
+        return [true, "Comando para agregar Chat $vChat y Robot $vRobot a «{$h['nombre']}» en $domChat. Vale " . self::VIGENCIA_H . ' horas.', $codigo];
+    }
+
+    private static function limpiaVer($v): string
+    {
+        return Central::limpia((string) $v) ?? '';
+    }
+
+    /** ¿Se le puede ofrecer «Agregar Chat y Robot»? (activa, viva y sin chat ni robot) */
+    public static function ofrecerChat(array $hija): bool
+    {
+        $l = $hija['latido'] ?? null;
+        return (int) $hija['activa'] === 1 && $l && time() - strtotime((string) $l['visto_en']) < self::VIVA_SEG
+            && trim((string) $l['chat_ver']) === '' && trim((string) $l['robot_ver']) === '';
+    }
+
     /** Crea el código de instalación de una hija. [ok, mensaje, código] */
     public static function crearCodigo(int $hijaId, array $d, string $por = 'joe'): array
     {
@@ -173,12 +232,14 @@ class Instalador
             return self::scriptError('La central no tiene listo el paquete del CRM. Avísale a soporte.');
         }
         $conChat = (int) ($v['inst']['con_chat'] ?? 0) === 1;
+        $agregar = ($v['inst']['tipo'] ?? 'nueva') === 'chat';
         $vChat = $conChat ? self::versionInstalable('chat') : null;
         $vRobot = $conChat ? self::versionInstalable('robot') : null;
         if ($conChat && ($vChat === null || $vRobot === null)) {
             return self::scriptError('La central no tiene listos los paquetes del Chat y el Robot. Avísale a soporte.');
         }
         return strtr($tpl, [
+            '__MODO__'            => $agregar ? 'agregar' : 'nueva',
             '__CON_CHAT__'        => $conChat ? '1' : '0',
             '__DOMINIO_CHAT__'    => $conChat ? (string) $v['inst']['dominio_chat'] : '',
             '__VERSION_CHAT__'    => (string) $vChat,
@@ -203,11 +264,14 @@ class Instalador
      * El instalador canjea el código: la hija recibe una llave NUEVA. [ok, mensaje, datos]
      * Se puede canjear de nuevo mientras ninguna instalación termine bien (cada vez, otra llave).
      */
-    public static function canjear(string $codigo, string $servidor, string $ip): array
+    public static function canjear(string $codigo, string $servidor, string $ip, string $authorization = ''): array
     {
         $v = self::vigente($codigo);
         if (! $v) {
             return [false, 'Este código de instalación no existe, ya se usó o venció. Pide uno nuevo en la central.', null];
+        }
+        if (($v['inst']['tipo'] ?? 'nueva') === 'chat') {
+            return self::canjearChat($v, $servidor, $ip, $authorization);
         }
         $ver = self::versionInstalable();
         if ($ver === null) {
@@ -234,6 +298,31 @@ class Instalador
             'nombre_robot' => (string) ($i['nombre_robot'] ?? ''),
             'version_chat' => (int) ($i['con_chat'] ?? 0) === 1 ? (string) self::versionInstalable('chat') : '',
             'version_robot' => (int) ($i['con_chat'] ?? 0) === 1 ? (string) self::versionInstalable('robot') : '',
+        ]];
+    }
+
+    /** Agregar Chat y Robot: solo con la llave que ya tiene el agente de ESA hija. No se rota la llave. */
+    private static function canjearChat(array $v, string $servidor, string $ip, string $authorization): array
+    {
+        $h = $v['hija'];
+        $i = $v['inst'];
+        $deLlave = Central::hijaPorLlave($authorization);
+        if (! $deLlave || (int) $deLlave['id'] !== (int) $h['id']) {
+            return [false, 'Este comando es para el servidor de «' . $h['nombre'] . '»: córrelo ahí (no encontré su agente o su llave no coincide).', null];
+        }
+        $vChat = self::versionInstalable('chat');
+        $vRobot = self::versionInstalable('robot');
+        if ($vChat === null || $vRobot === null) {
+            return [false, 'La central no tiene listos los paquetes del Chat y el Robot.', null];
+        }
+        $servidor = mb_substr((string) preg_replace('/[^A-Za-z0-9._-]/', '', $servidor), 0, 80);
+        Central::db()->table('instalaciones')->where('id', (int) $i['id'])->set('intentos', 'intentos+1', false)->update([
+            'estado' => 'canjeado', 'canjeado_en' => date('Y-m-d H:i:s'), 'servidor' => $servidor, 'ip' => mb_substr($ip, 0, 45),
+        ]);
+        return [true, 'ok', [
+            'hija' => self::slug($h['nombre']), 'nombre' => $h['nombre'], 'tipo' => 'chat', 'dominio' => strtolower((string) $h['dominio']),
+            'con_chat' => true, 'dominio_chat' => (string) $i['dominio_chat'], 'nombre_robot' => (string) $i['nombre_robot'],
+            'version_chat' => $vChat, 'version_robot' => $vRobot, 'ip' => $ip, 'central' => self::urlCentral(),
         ]];
     }
 
