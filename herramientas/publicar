@@ -88,14 +88,19 @@ git merge-base --is-ancestor "origin/$RAMA" HEAD || error "GitHub ($RAMA) tiene 
 ok "GitHub no tiene cambios ajenos"
 
 # 2) qué entra
+# Borrados a propósito: el CRM entra con --ignore-removal (no arrastra los borrados sueltos de la madre), así que un
+# archivo se retira con «git rm» ANTES de publicar. Un ensayo o un error los deja otra vez preparados, no los pierde.
+BORRADOS=$(git diff --cached --name-only --diff-filter=D)
+soltar() { git reset -q; [ -z "$BORRADOS" ] || echo "$BORRADOS" | xargs -r git rm -q --cached --ignore-unmatch --; }
 git add $ADD . 2>/dev/null
 CAMBIOS=$(git diff --cached --name-only)
-[ -n "$CAMBIOS" ] || { git reset -q; error "no hay cambios para publicar"; }
+[ -n "$CAMBIOS" ] || { soltar; error "no hay cambios para publicar"; }
 echo "  entran $(echo "$CAMBIOS" | wc -l) archivo(s):"; echo "$CAMBIOS" | sed 's/^/    /' | head -40
 
 # 3) nada sensible: archivos prohibidos, llaves y datos de tecnova
-deshacer() { git reset -q; error "$1"; }
-echo "$CAMBIOS" | grep -E '(^|/)(\.env[^/]*|[^/]*\.env|panel\.env|cuenta\.env|usuarios\.json|cuentas\.json|respuestas\.json|creds\.json|mensajes\.db.*|tienda\.json)$|(^|/)(datos|sesion|node_modules|vendor)/' \
+deshacer() { soltar; error "$1"; }
+# Los .env.example sí van (son la plantilla); su CONTENIDO igual pasa por la revisión de llaves de abajo.
+echo "$CAMBIOS" | grep -vE '(^|/)\.env\.example$' | grep -E '(^|/)(\.env[^/]*|[^/]*\.env|panel\.env|cuenta\.env|usuarios\.json|cuentas\.json|respuestas\.json|creds\.json|mensajes\.db.*|tienda\.json)$|(^|/)(datos|sesion|node_modules|vendor)/' \
   && deshacer "esos archivos son DATOS o claves y no pueden ir al repositorio"
 LLAVES='sk-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{10,}|AIza[0-9A-Za-z_-]{30,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|EAA[A-Za-z0-9]{40,}|APP_USR-[0-9-]{20,}|ghp_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY'
 DATOS='2065583357398305|51947670561|tecnovaplus\.(online|site)|chat\.tecnovaplus|crm\.tecnovaplus|haro\.tiktokers\.live'
@@ -132,7 +137,7 @@ ok "pruebas"
 ANTES=$(version_actual); NUEVA=$(subir_version "$ANTES" "$TIPO")
 git rev-parse -q --verify "refs/tags/v$NUEVA" >/dev/null && deshacer "la etiqueta v$NUEVA ya existe"
 echo "  versión: $ANTES → ${NEG}$NUEVA${FIN}"
-if [ $SECO = 1 ]; then git reset -q; ok "ENSAYO terminado: no se publicó nada"; exit 0; fi
+if [ $SECO = 1 ]; then soltar; ok "ENSAYO terminado: no se publicó nada"; exit 0; fi
 
 if [ "$VERSIONES" = "deploy/version.json" ]; then
   python3 - "$NUEVA" "$NOTA" <<'PY'
