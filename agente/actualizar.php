@@ -17,7 +17,7 @@
  * Chat y Robot se reinician con systemctl: el agente corre como root (instalador de una línea) o con `sudo -n`.
  * Prueba del «vuelve solo»: HARO_ACTUALIZAR_FALLAR_EN=salud php actualizar.php <hija> --pieza chat
  */
-const AGENTE_VER = '1.3.0';
+const AGENTE_VER = '1.3.1';
 const LLAVE_PUBLICA = 'b8f6c1675fe4fbe201e4d9b8dab96e97403409184336884484356e4853ea710a';
 // Archivos que trae el paquete del CRM pero son de la hija (si ya existen, no se pisan).
 const CONSERVAR = [
@@ -78,6 +78,21 @@ $auth = "Authorization: Bearer {$c['llave']}\r\n";
 $lock = fopen("$base/actualizar-$hija.lock", 'c');
 if (! flock($lock, LOCK_EX | LOCK_NB)) {
     fin('Ya hay una actualización corriendo para esta hija.');
+}
+// Agente de usuario (~/haro-agente) al que se le corre el CRM con sudo (hija con «dueno»): lo que root crea aquí vuelve al
+// dueño de la carpeta del agente; si no, después el agente (sin sudo) no podría usar paquetes/, respaldos/ ni tmp/.
+if (esRoot() && @fileowner($base) !== 0) {
+    register_shutdown_function(static function () use ($base): void {
+        foreach (['paquetes', 'respaldos', 'tmp'] as $d) {
+            if (is_dir("$base/$d")) {
+                sh('chown -R --reference=' . escapeshellarg($base) . ' ' . escapeshellarg("$base/$d"));
+            }
+        }
+        foreach (glob("$base/actualizar-*.lock") ?: [] as $f) {
+            @chown($f, (int) fileowner($base));
+            @chgrp($f, (int) filegroup($base));
+        }
+    });
 }
 
 /** La última versión publicada de una pieza, según la central. */
