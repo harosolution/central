@@ -134,15 +134,30 @@ $porActualizar = array_values(array_filter($hijas, static fn ($h) => (int) $h['a
               <summary>Instalar en un servidor nuevo</summary>
               <form method="post" action="<?= $central ?>/hijas/<?= (int) $h['id'] ?>/instalador" class="space-y-2 mt-2">
                 <?= csrf_field() ?>
-                <label class="ce-lbl">Empresa (como saldrá en su CRM)<input class="ce-in" name="empresa" required maxlength="120" value="<?= esc($in['empresa'] ?? '') ?>"></label>
-                <label class="ce-lbl">Administrador: nombre<input class="ce-in" name="admin_nombre" required maxlength="120" value="<?= esc($in['admin_nombre'] ?? $h['contacto_nombre']) ?>"></label>
-                <label class="ce-lbl">Administrador: correo (con él entra)<input class="ce-in" type="email" name="admin_email" required maxlength="120" value="<?= esc($in['admin_email'] ?? '') ?>"></label>
-                <label class="text-xs flex items-center gap-2" title="Para que el CRM busque agencias y emita guías. Usa SU propia cuenta de SHALOM: la sesión la sube la empresa con la extensión «Shalom Connect»."><input type="checkbox" name="con_shalom" value="1" <?= ! $in || (int) ($in['con_shalom'] ?? 1) === 1 ? 'checked' : '' ?>> Con API de SHALOM (agencias y guías)</label>
-                <label class="text-xs flex items-center gap-2"><input type="checkbox" name="con_chat" value="1" <?= ! $in || (int) ($in['con_chat'] ?? 1) === 1 ? 'checked' : '' ?>> Instalar también Chat y Robot</label>
-                <label class="ce-lbl">Dominio del chat (el robot va en /tecnobot/)<input class="ce-in" name="dominio_chat" maxlength="120" placeholder="<?= esc($h['dominio'] !== '' ? \Central\Libraries\Instalador::dominioChat($h['dominio']) : 'chat.empresa.com') ?>" value="<?= esc($in['dominio_chat'] ?? '') ?>"></label>
-                <label class="ce-lbl">Nombre de la vendedora IA<input class="ce-in" name="nombre_robot" maxlength="40" placeholder="Asistente" value="<?= esc($in['nombre_robot'] ?? '') ?>"></label>
-                <label class="text-xs flex items-center gap-2" title="Va con el Robot. Para auditar y configurar el robot desde Claude (solo edita su borrador). La clave va a nombre del administrador."><input type="checkbox" name="con_conector" value="1" <?= ! $in || (int) ($in['con_conector'] ?? 1) === 1 ? 'checked' : '' ?>> Con conector de Claude</label>
-                <label class="text-xs flex items-center gap-2" title="Usuario haro-soporte que solo entra con las llaves de HARO: mirar registros, reiniciar los servicios de esta tienda y correr el agente. No es sudo completo; se quita con poner-soporte.sh --quitar. La central anota cómo entrar."><input type="checkbox" name="con_soporte" value="1" <?= ! $in || (int) ($in['con_soporte'] ?? 1) === 1 ? 'checked' : '' ?>> Con acceso de soporte HARO</label>
+                <?php // Fase 7f (5-nov-2026, Joe): cada dato con una ayuda breve de para qué sirve. $ay = estilo de esa ayuda.
+                $ay = 'block text-[11px] leading-snug text-[#9CA3AF] font-normal mt-0.5';
+                $mx = \Central\Libraries\Instalador::MAX_TIENDA; $tv = (string) ($in['tienda'] ?? ''); ?>
+                <label class="ce-lbl">Nombre de la tienda <span class="text-[#6B7280]">(hasta <?= $mx ?>)</span>
+                  <input class="ce-in" name="tienda" maxlength="<?= $mx ?>" placeholder="Ej.: SIETE DESEOS" value="<?= esc($tv) ?>" oninput="this.parentNode.querySelector('[data-cuenta]').textContent = this.value.length + '/<?= $mx ?>'">
+                  <span class="<?= $ay ?>">Sale arriba del menú del CRM, en el chat y en el saludo del robot. Corto, para que se vea completo. Vacío = se arma con la razón social. <b data-cuenta class="text-[#E5E7EB]"><?= mb_strlen($tv) ?>/<?= $mx ?></b></span></label>
+                <label class="ce-lbl">Razón social<input class="ce-in" name="empresa" required maxlength="120" placeholder="Ej.: SIETE DESEOS S.A.C." value="<?= esc($in['empresa'] ?? '') ?>">
+                  <span class="<?= $ay ?>">El nombre legal de la empresa: sale en boletas, documentos y su página de privacidad.</span></label>
+                <label class="ce-lbl">Administrador: nombre<input class="ce-in" name="admin_nombre" required maxlength="120" value="<?= esc($in['admin_nombre'] ?? $h['contacto_nombre']) ?>">
+                  <span class="<?= $ay ?>">Quien manda en la tienda. Con su primer nombre se crea su clave del conector de Claude.</span></label>
+                <label class="ce-lbl">Administrador: correo<input class="ce-in" type="email" name="admin_email" required maxlength="120" value="<?= esc($in['admin_email'] ?? '') ?>">
+                  <span class="<?= $ay ?>">Con este correo entra al CRM. Su clave sale UNA sola vez al terminar la instalación: anótala. Al entrar, el CRM le abre «Configura tu tienda».</span></label>
+                <label class="text-xs flex items-start gap-2"><input type="checkbox" class="mt-0.5" name="con_shalom" value="1" <?= ! $in || (int) ($in['con_shalom'] ?? 1) === 1 ? 'checked' : '' ?>><span>Con API de SHALOM (agencias y guías)
+                  <span class="<?= $ay ?>">Para buscar agencias y emitir guías con SU propia cuenta de SHALOM (la sesión la sube la empresa con la extensión).</span></span></label>
+                <label class="text-xs flex items-start gap-2"><input type="checkbox" class="mt-0.5" name="con_chat" value="1" <?= ! $in || (int) ($in['con_chat'] ?? 1) === 1 ? 'checked' : '' ?>><span>Instalar también Chat y Robot
+                  <span class="<?= $ay ?>">El chat de WhatsApp y la vendedora IA, en el dominio del chat. Sin marcar: solo el CRM.</span></span></label>
+                <label class="ce-lbl">Dominio del chat (el robot va en /tecnobot/)<input class="ce-in" name="dominio_chat" maxlength="120" placeholder="<?= esc($h['dominio'] !== '' ? \Central\Libraries\Instalador::dominioChat($h['dominio']) : 'chat.empresa.com') ?>" value="<?= esc($in['dominio_chat'] ?? '') ?>">
+                  <span class="<?= $ay ?>">Debe apuntar a este mismo servidor antes de pegar el comando. Vacío = chat.&lt;su dominio&gt;.</span></label>
+                <label class="ce-lbl">Nombre de la vendedora IA<input class="ce-in" name="nombre_robot" maxlength="40" placeholder="Asistente" value="<?= esc($in['nombre_robot'] ?? '') ?>">
+                  <span class="<?= $ay ?>">Cómo se presenta el robot con los clientes (ej. Sofía). Nace apagado y sin IA: se enciende cuando esté listo.</span></label>
+                <label class="text-xs flex items-start gap-2"><input type="checkbox" class="mt-0.5" name="con_conector" value="1" <?= ! $in || (int) ($in['con_conector'] ?? 1) === 1 ? 'checked' : '' ?>><span>Con conector de Claude
+                  <span class="<?= $ay ?>">Va con el robot: para auditarlo y armar sus reglas desde Claude. Solo cambia el borrador; se publica en su panel.</span></span></label>
+                <label class="text-xs flex items-start gap-2"><input type="checkbox" class="mt-0.5" name="con_soporte" value="1" <?= ! $in || (int) ($in['con_soporte'] ?? 1) === 1 ? 'checked' : '' ?>><span>Con acceso de soporte HARO
+                  <span class="<?= $ay ?>">Para que HARO entre a revisar sin contraseñas: mira registros y reinicia; no edita nada (lo que se arregla, se arregla en la madre).</span></span></label>
                 <div class="text-xs text-[#9CA3AF]">Dominio del CRM: <b><?= esc($h['dominio'] !== '' ? $h['dominio'] : 'falta: ponlo en Editar') ?></b>. Los dos dominios deben apuntar al servidor. Te doy un comando de una línea que vale 48 h.</div>
                 <button class="ce-btn bg-[#22C55E] text-[#0B1220]">Crear instalador</button>
               </form>

@@ -159,6 +159,14 @@ class Instalador
         if (! filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($email) > 120) {
             return [false, 'El correo del administrador no es válido.', null];
         }
+        // Fase 7f: el nombre corto de la tienda (arriba del menú del CRM, en el chat y en el saludo del robot).
+        $tienda = trim((string) preg_replace('/\s+/u', ' ', (string) ($d['tienda'] ?? '')));
+        if ($tienda === '') {
+            $tienda = self::nombreCorto($empresa);
+        }
+        if (mb_strlen($tienda) > self::MAX_TIENDA) {
+            return [false, 'El nombre de la tienda puede tener hasta ' . self::MAX_TIENDA . ' letras (tiene ' . mb_strlen($tienda) . '): así se ve completo arriba del menú.', null];
+        }
         $ver = self::versionInstalable();
         if ($ver === null) {
             return [false, 'Todavía no hay un paquete del CRM con base inicial: ármalo con herramientas/empaquetar.php.', null];
@@ -187,7 +195,7 @@ class Instalador
         $codigo = 'hi_' . bin2hex(random_bytes(16));
         $ahora = time();
         $db->table('instalaciones')->insert([
-            'hija_id' => $hijaId, 'codigo_hash' => hash('sha256', $codigo), 'empresa' => $empresa, 'admin_nombre' => $nombre,
+            'hija_id' => $hijaId, 'codigo_hash' => hash('sha256', $codigo), 'empresa' => $empresa, 'tienda' => $tienda, 'admin_nombre' => $nombre,
             'admin_email' => $email, 'estado' => 'pendiente', 'version' => $ver, 'por' => mb_substr($por, 0, 30),
             'creada_en' => date('Y-m-d H:i:s', $ahora), 'vence_en' => date('Y-m-d H:i:s', $ahora + self::VIGENCIA_H * 3600),
             'con_chat' => $conChat ? 1 : 0, 'dominio_chat' => $domChat, 'nombre_robot' => $nombreRobot,
@@ -199,7 +207,17 @@ class Instalador
             . (! empty($d['con_conector']) ? ' con conector de Claude' : '') . " en $domChat" : "CRM $ver";
         $que .= ! empty($d['con_shalom']) ? ', con API de SHALOM' : '';
         $que .= ! empty($d['con_soporte']) ? ', con acceso de soporte' : '';
-        return [true, "Instalador de «{$h['nombre']}» listo ($que). Vale " . self::VIGENCIA_H . ' horas.', $codigo];
+        return [true, "Instalador de «{$h['nombre']}» listo ($que; arriba del menú dirá «{$tienda}»). Vale " . self::VIGENCIA_H . ' horas.', $codigo];
+    }
+
+    /** Hasta cuántas letras entra el nombre de la tienda arriba del menú del CRM (igual que App\Libraries\ConfiguraTienda). */
+    public const MAX_TIENDA = 20;
+
+    /** «SIETE DESEOS S.A.C.» → «SIETE DESEOS»: sin la forma societaria y cortado a lo que entra arriba del menú. */
+    public static function nombreCorto(string $empresa): string
+    {
+        $n = trim((string) preg_replace('/[\s,]+(S\.?\s?A\.?\s?C\.?|E\.?\s?I\.?\s?R\.?\s?L\.?|S\.?\s?R\.?\s?L\.?|S\.?\s?A\.?\s?A\.?|S\.?\s?A\.?)$/iu', '', trim($empresa)));
+        return trim(mb_substr($n !== '' ? $n : trim($empresa), 0, self::MAX_TIENDA));
     }
 
     /** crm.empresa.com → chat.empresa.com; empresa.com → chat.empresa.com. */
@@ -311,6 +329,7 @@ class Instalador
         return [true, 'ok', [
             'hija' => self::slug($h['nombre']), 'nombre' => $h['nombre'], 'llave' => $llave, 'dominio' => strtolower((string) $h['dominio']),
             'empresa' => $i['empresa'], 'admin_nombre' => $i['admin_nombre'], 'admin_email' => $i['admin_email'],
+            'tienda' => trim((string) ($i['tienda'] ?? '')) ?: self::nombreCorto((string) $i['empresa']),   // fase 7f
             'version' => $ver, 'ip' => $ip, 'central' => self::urlCentral(),
             'con_chat' => (int) ($i['con_chat'] ?? 0) === 1, 'dominio_chat' => (string) ($i['dominio_chat'] ?? ''),
             'nombre_robot' => (string) ($i['nombre_robot'] ?? ''),

@@ -171,7 +171,7 @@ class Panel extends Controller
             return $this->fuera();
         }
         $r = $this->request;
-        [$ok, $msg, $codigo] = Instalador::crearCodigo($id, ['empresa' => (string) $r->getPost('empresa'),
+        [$ok, $msg, $codigo] = Instalador::crearCodigo($id, ['empresa' => (string) $r->getPost('empresa'), 'tienda' => (string) $r->getPost('tienda'),
             'admin_nombre' => (string) $r->getPost('admin_nombre'), 'admin_email' => (string) $r->getPost('admin_email'),
             'con_chat' => (bool) $r->getPost('con_chat'), 'dominio_chat' => (string) $r->getPost('dominio_chat'),
             'nombre_robot' => (string) $r->getPost('nombre_robot'), 'con_conector' => (bool) $r->getPost('con_conector'),

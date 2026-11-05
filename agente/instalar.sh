@@ -42,6 +42,9 @@ CARPETA=''; SIN_PAQ=0; SIN_APACHE=0; SIN_SSL=0
 DB=''; DBPASS=''; SITIO=''; LLAVE=''; TMP=''; LOG='/dev/null'; MOTIVO=''; TERMINADO=0; CLAVE=''
 CREADO_DIR=0; CREADO_DB=0; CREADO_SITIO=0; CREADO_AGENTE=0; CREADO_AGENTE_DIR=0; CREADO_CRON=0
 EMPRESA=''; ADMIN_NOMBRE=''; ADMIN_EMAIL=''; IP_VISTA=''; ESQUEMA='http'
+# Fase 7f (5-nov-2026, Joe): EMPRESA = razón social (boletas, privacidad); TIENDA = el nombre corto (hasta 20) que sale
+# arriba del menú del CRM, en el chat y en el saludo del robot.
+TIENDA=''
 # PHP: el CRM pide 8.2 o más (public/index.php). Si el sistema trae uno viejo (Ubuntu 22.04 = 8.1), se pone el 8.3.
 PHP_MIN='8.2'; PHP_NUEVO='8.3'; PHP_PV=''; PHP_PPA=0
 # Chat y Robot (fase 6b). Node 20 = el de la madre: los módulos nativos del paquete (better-sqlite3) van compilados
@@ -367,6 +370,9 @@ canjear(){
   v="$(jcampo "$resp" version)"
   [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && VERSION="$v"
   EMPRESA="$(jcampo "$resp" empresa)"
+  TIENDA="$(jcampo "$resp" tienda)"
+  # Central vieja (sin «tienda»): las primeras 20 letras de la razón social.
+  [ -n "$TIENDA" ] || TIENDA="$(printf '%s' "$EMPRESA" | php -r 'echo mb_substr(trim(stream_get_contents(STDIN)), 0, 20);' 2>/dev/null || true)"
   ADMIN_NOMBRE="$(jcampo "$resp" admin_nombre)"
   ADMIN_EMAIL="$(jcampo "$resp" admin_email)"
   IP_VISTA="$(jcampo "$resp" ip)"
@@ -467,13 +473,16 @@ $st = $m->prepare('INSERT INTO users (company_id, role_id, full_name, email, pas
 $st->bind_param('isss', $rol, $nombre, $email, $hash);
 $st->execute();
 $st = $m->prepare('INSERT INTO system_settings (company_id, k, v) VALUES (1, ?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)');
-foreach (['business_name', 'business_brand', 'business_legal_name'] as $k) {
-    $st->bind_param('ss', $k, $empresa);
+// El nombre corto va arriba del menú (business_name) y es la «Marca» de Ajustes; la razón social, para documentos.
+// configura_tienda=pendiente: la primera vez que entra el administrador, el CRM le abre «Configura tu tienda».
+$tienda = (string) getenv('TIENDA') ?: mb_substr($empresa, 0, 20);
+foreach (['business_name' => $tienda, 'business_brand' => $tienda, 'business_legal_name' => $empresa, 'configura_tienda' => 'pendiente'] as $k => $v) {
+    $st->bind_param('ss', $k, $v);
     $st->execute();
 }
 echo "empresa y administrador creados\n";
 PHP
-  DB="$DB" DBPASS="$DBPASS" EMPRESA="$EMPRESA" ADMIN_NOMBRE="$ADMIN_NOMBRE" ADMIN_EMAIL="$ADMIN_EMAIL" CLAVE="$CLAVE" \
+  DB="$DB" DBPASS="$DBPASS" EMPRESA="$EMPRESA" TIENDA="$TIENDA" ADMIN_NOMBRE="$ADMIN_NOMBRE" ADMIN_EMAIL="$ADMIN_EMAIL" CLAVE="$CLAVE" \
     php "$TMP/primeros.php" </dev/null >>"$LOG" 2>&1 || die "No pude crear la empresa y el administrador (ver $LOG)."
   log "$(mysql -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB'" </dev/null) tablas · empresa «$EMPRESA» · administrador $ADMIN_EMAIL"
 }
@@ -772,7 +781,7 @@ TECNOBOT_MEDIA=$ROBOT_DIR/datos/$HIJA/media
 CRM_ORIGEN=$crm_url
 EOF
   admin_id="$(mysql -N -e "SELECT id FROM users WHERE email = '$(printf '%s' "$ADMIN_EMAIL" | sed "s/'/''/g")' LIMIT 1" "$DB" </dev/null 2>/dev/null || true)"
-  EMPRESA="$EMPRESA" CUENTA="$HIJA" CLAVE="$CLAVE" UID_CRM="${admin_id:-0}" "$NODE_BIN" -e '
+  EMPRESA="${TIENDA:-$EMPRESA}" CUENTA="$HIJA" CLAVE="$CLAVE" UID_CRM="${admin_id:-0}" "$NODE_BIN" -e '
     const c = require("crypto"), fs = require("fs"), d = process.argv[1];
     const hoy = new Date().toISOString().slice(0, 10);
     fs.writeFileSync(d + "/cuentas.json", JSON.stringify([{ id: process.env.CUENTA, nombre: process.env.EMPRESA, color: "#60a5fa", activa: true, creada: hoy }], null, 2) + "\n");
@@ -796,7 +805,7 @@ TIENDA_IA_URL=$TIENDA_IA_URL
 TIENDA_IA_TOKEN=
 EOF
   mkdir -p "$ROBOT_DIR/datos/$HIJA/media" "$ROBOT_DIR/datos/.rodobot"
-  EMPRESA="$EMPRESA" AGENTE="$NOMBRE_ROBOT" "$NODE_BIN" -e '
+  EMPRESA="${TIENDA:-$EMPRESA}" AGENTE="$NOMBRE_ROBOT" "$NODE_BIN" -e '
     const fs = require("fs");
     const r = (s) => s.split("__EMPRESA__").join(process.env.EMPRESA).split("__AGENTE__").join(process.env.AGENTE);
     const andar = (o) => typeof o === "string" ? r(o) : Array.isArray(o) ? o.map(andar)
@@ -1331,7 +1340,9 @@ resumen(){
     printf '\n  Falta el SSL. Cuando %s, corre (pone el certificado Y pasa todo a https):\n' "$([ "$CON_CHAT" = 1 ] && echo "$DOMINIO y $DOMINIO_CHAT apunten a este servidor" || echo "$DOMINIO apunte a este servidor")"
     printf '      sudo bash %s/poner-ssl.sh %s\n' "$AGENTE_DIR" "$HIJA"
   fi
-  printf '\n  Pendiente dentro del CRM: facturación, couriers y cuentas de pago%s.\n' "$([ "$CON_CHAT" = 1 ] && echo '; en el Robot: productos, pagos y encenderlo' || echo ', WhatsApp y Robot')"
+  printf '\n  Arriba del menú del CRM dice «%s». Al entrar por primera vez, el CRM abre «Configura tu tienda»:\n' "$TIENDA"
+  printf '  nombre, clave, WhatsApp y avisos, cobros, envíos y cómo conectar Claude, cada dato con su ayuda.\n'
+  printf '  Además: facturación%s.\n' "$([ "$CON_CHAT" = 1 ] && echo '; en el Robot: productos, pagos y encenderlo' || echo ', WhatsApp y Robot')"
   printf '\033[1;32m====================================================================\033[0m\n'
 }
 
