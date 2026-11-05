@@ -505,6 +505,29 @@ EOF
   log "secretos nuevos (cifrado, sesiones, robot, avisos push) · migraciones al día"
 }
 
+# Detrás de un proxy del proveedor que recibe el https y lo pasa por http al puerto 80 (Traefik de DatabaseMart y
+# parecidos), la redirección «todo a https» de certbot hace un bucle infinito (pasó con chat.sietedeseos.online).
+# 1) Se condiciona a X-Forwarded-Proto (el proxy dice que ya era https). 2) Si aun así hay bucle, se quita: ese proxy
+# ya obliga https. Sin proxy delante no cambia nada (no llega esa cabecera y redirige como siempre).
+ajustar_redireccion(){
+  local dom="$1" conf url cod
+  conf="$(grep -lE "^[[:space:]]*ServerName[[:space:]]+${dom//./\\.}[[:space:]]*\$" /etc/apache2/sites-available/*.conf 2>/dev/null | grep -v -- '-le-ssl' | head -1 || true)"
+  [ -n "$conf" ] || return 0
+  if ! grep -q 'X-Forwarded-Proto' "$conf"; then
+    sed -i "s#^\([[:space:]]*\)RewriteCond %{SERVER_NAME} =${dom//./\\.}\$#\1RewriteCond %{HTTP:X-Forwarded-Proto} !https\n&#" "$conf"
+  fi
+  apache2ctl configtest >>"$LOG" 2>&1 && systemctl reload apache2
+  sleep 2
+  url="https://$dom/haro-bucle-$RANDOM"
+  cod="$(curl -s -o /dev/null -m 15 -w '%{http_code}|%{redirect_url}' "$url" </dev/null || true)"
+  if [ "$cod" = "301|$url" ]; then
+    sed -i -e '/RewriteCond %{HTTP:X-Forwarded-Proto} !https/d' -e "/RewriteCond %{SERVER_NAME} =${dom//./\\.}\$/d" \
+           -e '\#RewriteRule \^ https://%{SERVER_NAME}%{REQUEST_URI} \[END,NE,R=permanent\]#d' "$conf"
+    apache2ctl configtest >>"$LOG" 2>&1 && systemctl reload apache2
+    aviso "$dom está detrás de un proxy que ya da el https: quité la redirección de certbot para que no haga un bucle."
+  fi
+}
+
 # Certificado SSL para un dominio (0 = emitido). Solo si el dominio ya apunta a este servidor; si no, avisa.
 certificado(){
   local dom="$1" resuelve mias apunta=0 ip
@@ -529,6 +552,7 @@ certificado(){
   if certbot --apache -d "$dom" --non-interactive --agree-tos --register-unsafely-without-email --redirect </dev/null >"$TMP/certbot-$dom.log" 2>&1; then
     cat "$TMP/certbot-$dom.log" >>"$LOG"
     log "certificado SSL emitido: https://$dom"
+    ajustar_redireccion "$dom"
     return 0
   fi
   cat "$TMP/certbot-$dom.log" >>"$LOG"
@@ -1017,9 +1041,27 @@ D="$(j dominio)"; C="$(j crm)"; DC="$(j chat_dominio)"; CH="$(j chat)"; RB="$(j 
 [ -n "$D" ] && [ -f "$C/.env" ] || { echo "No encuentro el dominio o el .env de $H."; exit 1; }
 command -v certbot >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-apache </dev/null
 DOMS=("$D"); [ -z "$DC" ] || DOMS+=("$DC")
+# Detrás de un proxy que da el https y pasa por http al puerto 80, la redirección de certbot hace un bucle: se
+# condiciona a X-Forwarded-Proto y, si aun así hay bucle, se quita (ese proxy ya obliga https).
+sin_bucle(){
+  local dom="$1" conf url cod e="${1//./\\.}"
+  conf="$(grep -lE "^[[:space:]]*ServerName[[:space:]]+$e[[:space:]]*\$" /etc/apache2/sites-available/*.conf 2>/dev/null | grep -v -- '-le-ssl' | head -1 || true)"
+  [ -n "$conf" ] || return 0
+  grep -q 'X-Forwarded-Proto' "$conf" || sed -i "s#^\([[:space:]]*\)RewriteCond %{SERVER_NAME} =$e\$#\1RewriteCond %{HTTP:X-Forwarded-Proto} !https\n&#" "$conf"
+  apache2ctl configtest && systemctl reload apache2; sleep 2
+  url="https://$dom/haro-bucle-$RANDOM"
+  cod="$(curl -s -o /dev/null -m 15 -w '%{http_code}|%{redirect_url}' "$url" </dev/null || true)"
+  if [ "$cod" = "301|$url" ]; then
+    sed -i -e '/RewriteCond %{HTTP:X-Forwarded-Proto} !https/d' -e "/RewriteCond %{SERVER_NAME} =$e\$/d" \
+           -e '\#RewriteRule \^ https://%{SERVER_NAME}%{REQUEST_URI} \[END,NE,R=permanent\]#d' "$conf"
+    apache2ctl configtest && systemctl reload apache2
+    echo "$dom está detrás de un proxy que ya da el https: quité la redirección de certbot (evita un bucle)."
+  fi
+}
 for dom in "${DOMS[@]}"; do
   certbot --apache -d "$dom" --non-interactive --agree-tos --register-unsafely-without-email --redirect </dev/null \
     || { echo "certbot no pudo con $dom: revisa que apunte a este servidor y que el puerto 80 llegue aquí."; exit 1; }
+  sin_bucle "$dom"
 done
 ts="$(date +%Y%m%d%H%M%S)"
 ARCH=("$C/.env")
