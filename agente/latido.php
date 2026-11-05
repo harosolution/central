@@ -18,7 +18,7 @@
  * actualiza a sí mismo (una vez por servidor) y después cada pieza con actualizar.php (ya el nuevo); cada resultado se
  * avisa a la central. Nunca se actualiza sola: solo lo que pidió Joe, el cliente o la casilla «actualizar sola».
  */
-const AGENTE_VER = '1.3.1';   // 1.3.0: también Chat, Robot y el propio agente (fase 7) · 1.3.1: carpetas de trabajo vuelven a su dueño tras un sudo
+const AGENTE_VER = '1.3.2';   // 1.3.0: también Chat, Robot y el propio agente (fase 7) · 1.3.1: carpetas de trabajo vuelven a su dueño tras un sudo · 1.3.2: el servicio es el que corre servidor.js/server.js (no causa-fichas)
 // Lo que sabe hacer este agente: la central solo le pide eso (los agentes viejos solo saben el CRM).
 const AGENTE_SABE = ['piezas', 'agente', 'chat', 'robot'];
 
@@ -64,41 +64,56 @@ function agenteVer(): string
     return preg_match("/const AGENTE_VER = '([\d.]+)'/", (string) @file_get_contents($base . '/latido.php'), $m) ? $m[1] : AGENTE_VER;
 }
 
-/** La unidad de systemd del Chat o el Robot de una hija (la que guardó el instalador, o la que corre esa carpeta). */
-function servicio_de(array $c, string $pieza): string
+/**
+ * La unidad de systemd que corre el programa PRINCIPAL de una carpeta (servidor.js del Chat, server.js del Robot): no
+ * cuentan otras que usan la misma carpeta (p. ej. causa-fichas-*, una tarea programada que casi siempre está detenida)
+ * ni unidades viejas. Si hay varias, la que está andando. [unidad, ¿andando?] · ['', false] si no hay ninguna.
+ */
+function unidadDe(string $dir, string $main): array
 {
-    $dir = rtrim((string) ($c[$pieza] ?? ''), '/');
-    if ($dir === '') {
-        return '';
-    }
-    $svc = trim((string) ($c[$pieza . '_servicio'] ?? ''));
-    if ($svc === '') {
-        foreach (glob('/etc/systemd/system/*.service') ?: [] as $f) {
-            if (strpos(basename($f), '@') !== false) {
-                continue;
+    $hallo = [];
+    foreach (glob('/etc/systemd/system/*.service') ?: [] as $f) {
+        if (strpos(basename($f), '@') !== false) {
+            continue;
+        }
+        $t = (string) @file_get_contents($f);
+        // ExecStart=<node> [opciones] /var/www/x/server.js  ·  o «server.js» relativo con WorkingDirectory=/var/www/x
+        if (preg_match('#^ExecStart=.*\s' . preg_quote("$dir/$main", '#') . '(\s|$)#m', $t)
+            || (preg_match('#^ExecStart=.*\s' . preg_quote($main, '#') . '(\s|$)#m', $t) && preg_match('#^WorkingDirectory=' . preg_quote($dir, '#') . '/?\s*$#m', $t))) {
+            $u = basename($f);
+            $o = [];
+            exec('systemctl is-active ' . escapeshellarg($u) . ' 2>/dev/null', $o);
+            if (trim((string) ($o[0] ?? '')) === 'active') {
+                return [$u, true];
             }
-            $t = (string) @file_get_contents($f);
-            if (preg_match('#^WorkingDirectory=' . preg_quote($dir, '#') . '/?\s*$#m', $t) || preg_match('#^ExecStart=\S+\s+' . preg_quote($dir, '#') . '/\S+\.js#m', $t)) {
-                $svc = basename($f);
-                break;
-            }
+            $hallo[] = $u;
         }
     }
-    return ($svc !== '' && substr($svc, -8) !== '.service') ? $svc . '.service' : $svc;
+    return [$hallo[0] ?? '', false];
 }
 
-/** Chat/Robot APAGADOS a propósito (servicio detenido): la central no los actualiza, porque reiniciarlos los prendería. */
+/**
+ * Chat/Robot APAGADOS (servicio detenido, o sin servicio): la central no los actualiza, porque reiniciarlos los prendería.
+ * Una carpeta que se maneja con git (la madre) no cuenta: esa nunca la actualiza el agente.
+ */
 function apagados(array $c): array
 {
     $out = [];
-    foreach (['chat', 'robot'] as $p) {
-        $svc = servicio_de($c, $p);
-        if ($svc === '' || ! preg_match('/^[A-Za-z0-9@_.-]+$/', $svc)) {
+    foreach (['chat' => 'servidor.js', 'robot' => 'server.js'] as $p => $main) {
+        $dir = rtrim((string) ($c[$p] ?? ''), '/');
+        if ($dir === '' || ! is_file("$dir/$main") || is_dir("$dir/.git")) {
             continue;
         }
-        $o = [];
-        exec('systemctl is-active ' . escapeshellarg($svc) . ' 2>/dev/null', $o);
-        if (trim((string) ($o[0] ?? '')) !== 'active') {
+        $svc = trim((string) ($c[$p . '_servicio'] ?? ''));
+        if ($svc !== '') {
+            $svc .= substr($svc, -8) === '.service' ? '' : '.service';
+            $o = [];
+            exec('systemctl is-active ' . escapeshellarg($svc) . ' 2>/dev/null', $o);
+            $andando = trim((string) ($o[0] ?? '')) === 'active';
+        } else {
+            [, $andando] = unidadDe($dir, $main);
+        }
+        if (! $andando) {
             $out[] = $p;
         }
     }

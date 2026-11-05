@@ -17,7 +17,7 @@
  * Chat y Robot se reinician con systemctl: el agente corre como root (instalador de una línea) o con `sudo -n`.
  * Prueba del «vuelve solo»: HARO_ACTUALIZAR_FALLAR_EN=salud php actualizar.php <hija> --pieza chat
  */
-const AGENTE_VER = '1.3.1';
+const AGENTE_VER = '1.3.2';
 const LLAVE_PUBLICA = 'b8f6c1675fe4fbe201e4d9b8dab96e97403409184336884484356e4853ea710a';
 // Archivos que trae el paquete del CRM pero son de la hija (si ya existen, no se pisan).
 const CONSERVAR = [
@@ -149,17 +149,32 @@ function podar(string $pieza): void
     foreach (array_slice($viejos, 2) as $v) { @unlink($v); }
 }
 
-/** La unidad de systemd que corre una carpeta (por WorkingDirectory o ExecStart). */
-function servicioDe(string $dir): string
+/**
+ * La unidad de systemd que corre el programa PRINCIPAL de una carpeta (servidor.js del Chat, server.js del Robot): no
+ * cuentan otras que usan la misma carpeta (p. ej. causa-fichas-*, una tarea programada que casi siempre está detenida)
+ * ni unidades viejas. Si hay varias, la que está andando. [unidad, ¿andando?] · ['', false] si no hay ninguna.
+ */
+function unidadDe(string $dir, string $main): array
 {
+    $hallo = [];
     foreach (glob('/etc/systemd/system/*.service') ?: [] as $f) {
-        if (strpos(basename($f), '@') !== false) { continue; }
+        if (strpos(basename($f), '@') !== false) {
+            continue;
+        }
         $t = (string) @file_get_contents($f);
-        if (preg_match('#^WorkingDirectory=' . preg_quote($dir, '#') . '/?\s*$#m', $t) || preg_match('#^ExecStart=\S+\s+' . preg_quote($dir, '#') . '/\S+\.js#m', $t)) {
-            return basename($f);
+        // ExecStart=<node> [opciones] /var/www/x/server.js  ·  o «server.js» relativo con WorkingDirectory=/var/www/x
+        if (preg_match('#^ExecStart=.*\s' . preg_quote("$dir/$main", '#') . '(\s|$)#m', $t)
+            || (preg_match('#^ExecStart=.*\s' . preg_quote($main, '#') . '(\s|$)#m', $t) && preg_match('#^WorkingDirectory=' . preg_quote($dir, '#') . '/?\s*$#m', $t))) {
+            $u = basename($f);
+            $o = [];
+            exec('systemctl is-active ' . escapeshellarg($u) . ' 2>/dev/null', $o);
+            if (trim((string) ($o[0] ?? '')) === 'active') {
+                return [$u, true];
+            }
+            $hallo[] = $u;
         }
     }
-    return '';
+    return [$hallo[0] ?? '', false];
 }
 
 /** El node que usa ese servicio (el instalador puede haber puesto uno propio en /opt/haro-node). */
@@ -242,12 +257,15 @@ if ($pieza === 'chat' || $pieza === 'robot') {
     }
 
     // Apagado a propósito (p. ej. una hija nueva que todavía no lo usa): no se toca, porque reiniciarlo lo prendería.
-    $svc = trim((string) ($c[$pieza . '_servicio'] ?? '')) ?: servicioDe($dir);
+    $svc = trim((string) ($c[$pieza . '_servicio'] ?? '')) ?: unidadDe($dir, $main)[0];
     if ($svc !== '' && substr($svc, -8) !== '.service') {
         $svc .= '.service';   // el instalador lo guarda sin «.service» (haro-<hija>-chat)
     }
     if ($svc !== '' && trim(sh('systemctl is-active ' . escapeshellarg($svc))) !== 'active') {
         fin("El $Nombre está apagado ($svc): no lo actualizo, porque reiniciarlo lo prendería. Se hará cuando lo prendan.");
+    }
+    if ($svc === '' && ! (is_dir("$dir/datos/.rodobot") && trim(sh('systemctl is-active ' . escapeshellarg('rodobot-actualizar@' . basename($dir) . '.path'))) === 'active')) {
+        fin("El $Nombre no tiene un servicio que lo corra (no está prendido): no lo actualizo. No se tocó nada.");
     }
 
     // Robot con su propio actualizador (RODOBOT 1.8+: rodobot-actualizar@<carpeta>.path): se le pide a él, que valida,
