@@ -7,6 +7,9 @@ $cuenta  = ['verde' => 0, 'ambar' => 0, 'rojo' => 0, 'gris' => 0];
 foreach ($hijas as $h) { if ((int) $h['activa'] === 1) { $cuenta[$h['estado']['color']]++; } }
 $central = rtrim(base_url('central'), '/');
 $cuentasIa = $cuentasIa ?? [];
+$nombresPieza = \Central\Libraries\Central::NOMBRES;
+// Fase 7: cuántas hijas tienen algo que se pueda actualizar a distancia (para «Actualizar todas»).
+$porActualizar = array_values(array_filter($hijas, static fn ($h) => (int) $h['activa'] === 1 && ! empty($h['actualizables']) && ! $h['actualizar_pedido']));
 ?>
 <div class="space-y-5">
   <?= $this->include('Central\Views\_cabecera') ?>
@@ -15,7 +18,12 @@ $cuentasIa = $cuentasIa ?? [];
     <?php foreach ($cuenta as $c => $n): ?>
       <span class="ce-pieza"><i class="ce-punto" style="background:<?= $colores[$c] ?>"></i><?= esc($textos[$c]) ?>: <b><?= $n ?></b></span>
     <?php endforeach; ?>
-    <span class="ce-pieza">Publicado: CRM <b><?= esc($ultimas['crm'] ?? '—') ?></b> · Chat <b><?= esc($ultimas['chat'] ?? '—') ?></b> · Robot <b><?= esc($ultimas['robot'] ?? '—') ?></b></span>
+    <span class="ce-pieza">Publicado: CRM <b><?= esc($ultimas['crm'] ?? '—') ?></b> · Chat <b><?= esc($ultimas['chat'] ?? '—') ?></b> · Robot <b><?= esc($ultimas['robot'] ?? '—') ?></b> · Agente <b><?= esc($ultimas['agente'] ?? '—') ?></b></span>
+    <?php if ($porActualizar): ?>
+      <form method="post" action="<?= $central ?>/hijas/actualizar-todas" class="ml-auto" onsubmit="return confirm('¿Actualizar <?= count($porActualizar) ?> hija(s) (<?= esc(implode(', ', array_map(static fn ($h) => $h['nombre'], $porActualizar)), 'js') ?>)? Cada agente instala lo que le falta en los próximos 10 minutos, con respaldo y vuelta atrás si algo falla.')">
+        <?= csrf_field() ?><button class="ce-btn bg-[#2563EB] text-white" style="padding:5px 12px;font-size:12px">Actualizar todas (<?= count($porActualizar) ?>)</button>
+      </form>
+    <?php endif; ?>
   </div>
 
   <div class="ce-card overflow-x-auto">
@@ -44,21 +52,26 @@ $cuentasIa = $cuentasIa ?? [];
           <td>
             <div class="flex items-center gap-2 font-semibold"><i class="ce-punto" style="background:<?= $colores[$e['color']] ?>"></i><?= esc($textos[$e['color']]) ?></div>
             <div class="flex flex-wrap gap-1 mt-1">
-            <?php foreach (['crm' => 'CRM', 'chat' => 'Chat', 'robot' => 'Robot'] as $k => $t): $p = $e['piezas'][$k]; if ($p['tiene'] === null) { continue; } ?>
-              <span class="ce-pieza <?= $p['al_dia'] === false ? 'atras' : ($p['al_dia'] ? 'ok' : '') ?>" title="Publicada: <?= esc($p['ultima'] ?? '—') ?>"><?= $t ?> <?= esc($p['tiene']) ?></span>
+            <?php foreach (['crm' => 'CRM', 'chat' => 'Chat', 'robot' => 'Robot', 'agente' => 'Agente'] as $k => $t): $p = $e['piezas'][$k] ?? null; if (! $p || $p['tiene'] === null) { continue; } ?>
+              <span class="ce-pieza <?= $p['al_dia'] === false ? 'atras' : ($p['al_dia'] ? 'ok' : '') ?>" title="Publicada: <?= esc($p['ultima'] ?? '—') ?>"<?= $k === 'agente' ? ' style="opacity:.75;font-size:11px"' : '' ?>><?= $t ?> <?= esc($p['tiene']) ?></span>
             <?php endforeach; ?>
             </div>
             <?php if ($l): ?><div class="text-xs text-[#9CA3AF] mt-1">Señal: hace <?= esc(\Central\Libraries\Central::hace(max(0, time() - strtotime((string) $l['visto_en'])))) ?></div><?php endif; ?>
-            <?php $ua = $h['ultima_act'] ?? null; if ($h['actualizar_pedido'] || ($ua && in_array($ua['estado'], ['pedida', 'enviada'], true))): ?>
-              <div class="text-xs text-[#F59E0B] mt-1">⏳ Actualización a <?= esc($ua['hasta'] ?? '') ?> pedida por <?= esc($ua['por'] ?? $h['actualizar_por']) ?></div>
-            <?php elseif ($ua): ?>
-              <div class="text-xs mt-1 <?= $ua['estado'] === 'ok' ? 'text-[#22C55E]' : 'text-[#EF4444]' ?>" title="<?= esc($ua['mensaje']) ?>"><?= $ua['estado'] === 'ok' ? '✓' : '✗' ?> <?= esc($ua['desde'] . ' → ' . $ua['hasta']) ?> · <?= esc(date('d/m H:i', strtotime((string) ($ua['terminada_en'] ?: $ua['pedida_en'])))) ?> (<?= esc($ua['por']) ?>)</div>
-            <?php endif; ?>
-            <?php if ((int) $h['activa'] === 1 && ($e['piezas']['crm']['al_dia'] ?? null) === false && ! $h['actualizar_pedido']): ?>
-              <form method="post" action="<?= $central ?>/hijas/<?= (int) $h['id'] ?>/actualizar" class="mt-1" onsubmit="return confirm('¿Actualizar <?= esc($h['nombre'], 'js') ?> a la <?= esc($e['piezas']['crm']['ultima'] ?? '', 'js') ?>? Su agente la instala en los próximos 10 minutos, con respaldo.')">
-                <?= csrf_field() ?><button class="ce-btn bg-[#2563EB] text-white" style="padding:5px 10px;font-size:12px">Actualizar ahora</button>
+            <?php // Fase 7: la última tanda, una línea por pieza (⏳ pedida/enviada · ✓ ok · ✗ fallo, con el motivo al pasar el mouse).
+              foreach (($h['acts'] ?? []) as $ua): $pz = $nombresPieza[$ua['pieza'] ?: 'crm'] ?? 'CRM';
+                $cuando = date('d/m H:i', strtotime((string) ($ua['terminada_en'] ?: $ua['pedida_en'])));
+                if (in_array($ua['estado'], ['pedida', 'enviada'], true)): ?>
+              <div class="text-xs text-[#F59E0B] mt-1">⏳ <?= esc($pz . ' → ' . $ua['hasta']) ?> <?= $ua['estado'] === 'enviada' ? 'instalándose' : 'pedida' ?> (<?= esc($ua['por']) ?>)</div>
+            <?php else: ?>
+              <div class="text-xs mt-1 <?= $ua['estado'] === 'ok' ? 'text-[#22C55E]' : 'text-[#EF4444]' ?>" title="<?= esc($ua['mensaje']) ?>"><?= $ua['estado'] === 'ok' ? '✓' : '✗' ?> <?= esc($pz . ' ' . $ua['desde'] . ' → ' . $ua['hasta']) ?> · <?= esc($cuando) ?> (<?= esc($ua['por']) ?>)<?= $ua['estado'] === 'fallo' ? ' — ' . esc(mb_substr((string) $ua['mensaje'], 0, 120)) : '' ?></div>
+            <?php endif; endforeach; ?>
+            <?php if ((int) $h['activa'] === 1 && ! empty($h['actualizables']) && ! $h['actualizar_pedido']):
+              $queda = implode(', ', array_map(static fn ($k) => $nombresPieza[$k] . ' ' . ($e['piezas'][$k]['ultima'] ?? ''), $h['actualizables'])); ?>
+              <form method="post" action="<?= $central ?>/hijas/<?= (int) $h['id'] ?>/actualizar" class="mt-1" onsubmit="return confirm('¿Actualizar <?= esc($h['nombre'], 'js') ?> (<?= esc($queda, 'js') ?>)? Su agente lo instala en los próximos 10 minutos, con respaldo y vuelta atrás si algo falla.')">
+                <?= csrf_field() ?><button class="ce-btn bg-[#2563EB] text-white" style="padding:5px 10px;font-size:12px" title="<?= esc($queda) ?>">Actualizar ahora</button>
               </form>
             <?php endif; ?>
+            <?php if ((int) ($h['auto_actualizar'] ?? 0) === 1): ?><div class="text-xs text-[#9CA3AF] mt-1">🌙 Se actualiza sola de 4 a 5 am</div><?php endif; ?>
           </td>
           <td style="max-width:260px">
             <span class="ce-pieza <?= esc($li['color']) ?>"><?= esc($li['plan']['nombre'] ?? 'Sin plan') ?></span>
@@ -92,6 +105,7 @@ $cuentasIa = $cuentasIa ?? [];
                   </select></label>
                 <label class="ce-lbl">Notas<textarea class="ce-in" name="notas" rows="2"><?= esc($h['notas']) ?></textarea></label>
                 <label class="text-xs flex items-center gap-2"><input type="checkbox" name="activa" value="1" <?= (int) $h['activa'] === 1 ? 'checked' : '' ?>> Activa</label>
+                <label class="text-xs flex items-center gap-2" title="Si está marcada, su agente instala lo publicado de madrugada (4 a 5 am, de a pocas), con respaldo y vuelta atrás. Si no, solo cuando tú o el cliente lo piden."><input type="checkbox" name="auto_actualizar" value="1" <?= (int) ($h['auto_actualizar'] ?? 0) === 1 ? 'checked' : '' ?>> Actualizar sola de madrugada</label>
                 <button class="ce-btn bg-[#2563EB] text-white">Guardar</button>
               </form>
               <form method="post" action="<?= $central ?>/hijas/<?= (int) $h['id'] ?>/llave" class="mt-2" onsubmit="return confirm('¿Generar una llave nueva? La actual deja de servir y habrá que ponerla en el agente y el .env de la hija.')">

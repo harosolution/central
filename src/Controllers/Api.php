@@ -51,14 +51,26 @@ class Api extends Controller
         }
 
         $est = Central::estado($fila);
-        // ¿Hay una actualización pedida (por Joe o por el cliente)? Se le entrega al agente UNA vez y se borra el pedido.
-        $actualizar = false;
-        if (! empty($hija['actualizar_pedido']) && ($est['piezas']['crm']['al_dia'] ?? true) === false) {
-            $actualizar = true;
-            $db->table('hijas')->where('id', (int) $hija['id'])->update(['actualizar_pedido' => null]);
-            $db->table('actualizaciones')->where('hija_id', (int) $hija['id'])->where('estado', 'pedida')->update(['estado' => 'enviada']);
-        } elseif (! empty($hija['actualizar_pedido'])) {
-            $db->table('hijas')->where('id', (int) $hija['id'])->update(['actualizar_pedido' => null]);   // ya está al día
+        // Fase 7 · «actualizar sola» (casilla de la hija, apagada salvo que Joe la prenda): de 4 a 5 am de Lima, de a pocas.
+        if (empty($hija['actualizar_pedido']) && (int) ($hija['auto_actualizar'] ?? 0) === 1 && Central::tocaAuto()) {
+            [$okAuto] = Central::pedirActualizacion((int) $hija['id'], 'auto');
+            if ($okAuto) {
+                $hija = $db->table('hijas')->where('id', (int) $hija['id'])->get()->getRowArray();
+            }
+        }
+        // ¿Hay una actualización pedida (Joe, el cliente o «sola»)? Se le entrega al agente UNA vez y se borra el pedido.
+        // Solo las piezas que siguen atrasadas y que ese agente sabe hacer; las demás se cierran como «al día».
+        $enviar = [];
+        if (! empty($hija['actualizar_pedido'])) {
+            [$posibles] = Central::paraActualizar($fila);
+            $pedidas = array_filter(explode(',', (string) ($hija['actualizar_piezas'] ?? ''))) ?: ['crm'];
+            $enviar = array_values(array_intersect($posibles, $pedidas));
+            $db->table('hijas')->where('id', (int) $hija['id'])->update(['actualizar_pedido' => null, 'actualizar_piezas' => '']);
+            foreach ($db->table('actualizaciones')->where('hija_id', (int) $hija['id'])->where('estado', 'pedida')->get()->getResultArray() as $a) {
+                $va = in_array($a['pieza'] ?: 'crm', $enviar, true);
+                $db->table('actualizaciones')->where('id', (int) $a['id'])->update($va ? ['estado' => 'enviada']
+                    : ['estado' => 'ok', 'mensaje' => 'Ya estaba al día (o ese agente todavía no sabe actualizarla).', 'terminada_en' => date('Y-m-d H:i:s')]);
+            }
         }
         return $this->response->setJSON([
             'ok'         => true,
@@ -66,7 +78,8 @@ class Api extends Controller
             'color'      => $est['color'],
             'mensaje'    => $est['mensaje'],
             'piezas'     => $est['piezas'],
-            'actualizar' => $actualizar,
+            'actualizar' => in_array('crm', $enviar, true),   // los agentes de antes de la 1.3.0 solo miran esto (CRM)
+            'piezas_actualizar' => $enviar,                    // 1.3.0+: agente, crm, robot, chat (en ese orden)
             'hora'       => date('c'),
         ]);
     }
@@ -82,7 +95,7 @@ class Api extends Controller
         return $this->response->setStatusCode($ok ? 200 : 422)->setJSON(['ok' => $ok, 'mensaje' => $msg]);
     }
 
-    /** POST /central/api/actualizacion {ok, desde, hasta, mensaje} — el agente informa cómo le fue. */
+    /** POST /central/api/actualizacion {ok, pieza, desde, hasta, mensaje} — el agente informa cómo le fue (una pieza). */
     public function actualizacion()
     {
         $hija = $this->hija();
@@ -91,19 +104,20 @@ class Api extends Controller
         }
         $b = $this->request->getJSON(true) ?: [];
         $db = Central::db();
-        $fila = $db->table('actualizaciones')->where('hija_id', (int) $hija['id'])->where('estado', 'enviada')->orderBy('id', 'DESC')->get()->getRowArray();
+        $pieza = in_array($b['pieza'] ?? 'crm', Central::PIEZAS, true) ? (string) ($b['pieza'] ?? 'crm') : 'crm';
+        $fila = $db->table('actualizaciones')->where('hija_id', (int) $hija['id'])->where('pieza', $pieza)->where('estado', 'enviada')->orderBy('id', 'DESC')->get()->getRowArray();
         $datos = ['estado' => ! empty($b['ok']) ? 'ok' : 'fallo', 'mensaje' => mb_substr((string) ($b['mensaje'] ?? ''), 0, 500), 'terminada_en' => date('Y-m-d H:i:s')];
         if ($fila) {
             $db->table('actualizaciones')->where('id', (int) $fila['id'])->update($datos + ['hasta' => mb_substr((string) ($b['hasta'] ?? $fila['hasta']), 0, 20)]);
         } else {
-            $db->table('actualizaciones')->insert($datos + ['hija_id' => (int) $hija['id'], 'desde' => mb_substr((string) ($b['desde'] ?? ''), 0, 20),
+            $db->table('actualizaciones')->insert($datos + ['hija_id' => (int) $hija['id'], 'pieza' => $pieza, 'desde' => mb_substr((string) ($b['desde'] ?? ''), 0, 20),
                 'hasta' => mb_substr((string) ($b['hasta'] ?? ''), 0, 20), 'por' => 'agente', 'pedida_en' => date('Y-m-d H:i:s')]);
         }
         return $this->response->setJSON(['ok' => true]);
     }
 
     /**
-     * GET /central/api/paquete?pieza=crm|chat|robot&ver=2.2.0 — el paquete firmado (lo arma herramientas/empaquetar.php).
+     * GET /central/api/paquete?pieza=crm|chat|robot|agente&ver=2.2.0 — el paquete firmado (lo arma herramientas/empaquetar.php).
      * Cabeceras X-Sha256 y X-Firma: el agente las comprueba con la llave pública que lleva escrita.
      */
     public function paquete()
@@ -114,7 +128,7 @@ class Api extends Controller
         }
         $pieza = (string) $this->request->getGet('pieza');
         $ver = (string) $this->request->getGet('ver');
-        if (! in_array($pieza, ['crm', 'chat', 'robot'], true) || ! preg_match('/^\d+\.\d+\.\d+$/', $ver)) {
+        if (! in_array($pieza, Central::PIEZAS, true) || ! preg_match('/^\d+\.\d+\.\d+$/', $ver)) {
             return $this->response->setStatusCode(400)->setJSON(['ok' => false, 'error' => 'Pieza o versión inválida.']);
         }
         $f = dirname(__DIR__, 2) . "/datos/paquetes/{$pieza}-{$ver}.tgz";

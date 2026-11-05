@@ -56,6 +56,8 @@ class Panel extends Controller
             $h['estado'] = Central::estado($h['latido']);
             $h['licencia'] = Licencias::estado($h);
             $h['ultima_act'] = Central::ultimaActualizacion((int) $h['id']);
+            $h['acts'] = Central::ultimasActualizaciones((int) $h['id']);   // fase 7: una fila por pieza
+            [$h['actualizables']] = Central::paraActualizar($h['latido']);
             $h['terminos'] = Licencias::aceptacion((int) $h['id']);   // fase 5
             $h['instalacion'] = Instalador::ultima((int) $h['id']);   // fase 6
         }
@@ -92,6 +94,7 @@ class Panel extends Controller
             'contacto_nombre'   => $p('contacto_nombre', 100),
             'contacto_telefono' => preg_replace('/[^\d+ ]/', '', $p('contacto_telefono', 20)),
             'streamy_cuenta_id' => (int) $this->request->getPost('streamy_cuenta_id') ?: null,
+            'auto_actualizar'   => $this->request->getPost('auto_actualizar') ? 1 : 0,   // fase 7: «actualizar sola»
         ];
     }
 
@@ -145,6 +148,18 @@ class Panel extends Controller
         }
         [$ok, $msg] = Central::pedirActualizacion($id, 'joe');
         return $this->volver('hijas', $ok ? $msg : null, $ok ? null : $msg);
+    }
+
+    /** Fase 7: «Actualizar todas» — cada hija activa con agente, todas sus piezas atrasadas. */
+    public function actualizarTodas()
+    {
+        if (! $this->permitido()) {
+            return $this->fuera();
+        }
+        [$n, $lineas] = Central::actualizarTodas('joe');
+        $msg = $n ? "Pedida la actualización de $n hija(s): sus agentes la instalan en los próximos 10 minutos, con respaldo y vuelta atrás. " . implode(' · ', $lineas)
+            : 'No hay nada que actualizar. ' . implode(' · ', $lineas);
+        return $this->volver('hijas', mb_substr($msg, 0, 1500));
     }
 
     /** Fase 6: el comando de una línea para instalar esta hija en un servidor nuevo (se muestra UNA vez). */

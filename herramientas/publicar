@@ -1,0 +1,202 @@
+#!/bin/bash
+# ============================================================================
+#  PUBLICAR · saca una versión nueva desde la MADRE tecnova (3-nov-2026, Joe)
+#
+#  REGLA: todo se trabaja en la madre; las hijas solo reciben lo publicado.
+#    crm   → /var/www/tecnovaplus/crm   → harosolution/haro   (ramas madre y main)
+#    chat  → /var/www/botpruebas        → harosolution/Chat   (rama main)
+#    robot → /var/www/tecnobot          → harosolution/rodobot (rama main)
+#
+#  Uso:
+#    publicar estado                               qué versión tiene cada parte y qué falta publicar
+#    publicar <parte> <parche|menor|mayor> "qué cambió" [--seco] [--repartir]
+#        parche = arreglo (2.0.1 → 2.0.2) · menor = algo nuevo (2.0.1 → 2.1.0) · mayor = cambio grande (→ 3.0.0)
+#        --seco      ensayo: revisa todo y dice qué publicaría, sin publicar nada
+#        --repartir  (solo chat) después de publicar, copia el código a sus hijas y las reinicia
+#
+#  Antes de publicar SIEMPRE: (1) GitHub no tiene cambios hechos desde otro lado; (2) no se cuelan llaves,
+#  .env, sesiones ni datos de tecnova; (3) sintaxis; (4) pruebas. Si algo falla, no publica nada.
+#
+#  Fase 7 (5-nov-2026): al terminar arma SOLO el paquete firmado de la central (lo bajan los agentes de las hijas) y
+#  deja a la MADRE usando la versión nueva (reinicia sus chats y su robot, y pide a la puerta de su conector la misma
+#  versión). Las hijas se actualizan desde la central («Actualizar ahora» / «Actualizar todas»), sin sudo.
+#  La fuente de este script está en la central: herramientas/publicar (se instala en /usr/local/bin/publicar).
+# ============================================================================
+set -uo pipefail
+
+ROJO=$'\e[31m'; VERDE=$'\e[32m'; AMAR=$'\e[33m'; NEG=$'\e[1m'; FIN=$'\e[0m'
+error() { echo "${ROJO}✗ $*${FIN}" >&2; exit 1; }
+ok()    { echo "${VERDE}✓${FIN} $*"; }
+aviso() { echo "${AMAR}!${FIN} $*"; }
+
+config() {
+  case "$1" in
+    crm)   DIR=/var/www/tecnovaplus/crm; RAMA=madre; TAMBIEN_MAIN=1; VERSIONES=deploy/version.json; ADD="--ignore-removal" ;;
+    chat)  DIR=/var/www/botpruebas;      RAMA=main;  TAMBIEN_MAIN=0; VERSIONES=package.json;        ADD="-A" ;;
+    robot) DIR=/var/www/tecnobot;        RAMA=main;  TAMBIEN_MAIN=0; VERSIONES=package.json;        ADD="-A" ;;
+    *) error "parte desconocida: «$1» (usa crm, chat o robot)" ;;
+  esac
+}
+
+version_actual() {
+  if [ "$VERSIONES" = "deploy/version.json" ]; then
+    python3 -c "import json;print(json.load(open('$DIR/deploy/version.json'))['stable'])"
+  else
+    python3 -c "import json;print(json.load(open('$DIR/package.json'))['version'])"
+  fi
+}
+
+subir_version() {  # $1 versión  $2 parche|menor|mayor
+  python3 - "$1" "$2" <<'PY'
+import sys
+v, t = sys.argv[1], sys.argv[2]
+a, b, c = (int(x) for x in v.split('.')[:3])
+print({'parche': f'{a}.{b}.{c+1}', 'menor': f'{a}.{b+1}.0', 'mayor': f'{a+1}.0.0'}[t])
+PY
+}
+
+# ─────────────────────────────────────────────────────────────── estado
+if [ "${1:-}" = "estado" ]; then
+  for p in crm chat robot; do
+    config "$p"
+    cd "$DIR" || continue
+    git fetch -q origin 2>/dev/null
+    pend=$(git status --porcelain | grep -vc '^ D' || true)
+    [ "$p" = crm ] && pend=$(git add -n --ignore-removal . 2>/dev/null | wc -l)
+    detras=$(git rev-list --count "HEAD..origin/$RAMA" 2>/dev/null || echo "?")
+    printf "%-6s v%-8s rama %-6s  cambios sin publicar: %-4s  GitHub por delante: %s\n" "$p" "$(version_actual)" "$RAMA" "$pend" "$detras"
+  done
+  exit 0
+fi
+
+# ─────────────────────────────────────────────────────────────── argumentos
+PARTE="${1:-}"; TIPO="${2:-}"; NOTA="${3:-}"; shift $(( $# < 3 ? $# : 3 ))
+SECO=0; REPARTIR=0
+for a in "$@"; do case "$a" in --seco) SECO=1 ;; --repartir) REPARTIR=1 ;; *) error "opción desconocida: $a" ;; esac; done
+[ -n "$PARTE" ] && [ -n "$TIPO" ] && [ -n "$NOTA" ] || { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+case "$TIPO" in parche|menor|mayor) ;; *) error "tipo «$TIPO»: usa parche, menor o mayor" ;; esac
+config "$PARTE"
+[ "$REPARTIR" = 1 ] && [ "$PARTE" != chat ] && error "--repartir solo sirve para el chat (CRM y Robot se actualizan solos)"
+cd "$DIR" || error "no existe $DIR"
+[ "$(git branch --show-current)" = "$RAMA" ] || error "$DIR no está en la rama $RAMA"
+echo "${NEG}Publicar $PARTE ($TIPO): $NOTA${FIN}  $([ $SECO = 1 ] && echo '[ENSAYO]')"
+
+# 1) GitHub no tiene nada que la madre no tenga
+git fetch -q origin --tags || error "no pude hablar con GitHub"
+git merge-base --is-ancestor "origin/$RAMA" HEAD || error "GitHub ($RAMA) tiene cambios que la madre NO tiene: ¿se publicó desde otro lado? Tráelos a la madre primero."
+[ "$TAMBIEN_MAIN" = 1 ] && { git merge-base --is-ancestor origin/main HEAD || error "GitHub (main) tiene cambios que la madre NO tiene."; }
+ok "GitHub no tiene cambios ajenos"
+
+# 2) qué entra
+git add $ADD . 2>/dev/null
+CAMBIOS=$(git diff --cached --name-only)
+[ -n "$CAMBIOS" ] || { git reset -q; error "no hay cambios para publicar"; }
+echo "  entran $(echo "$CAMBIOS" | wc -l) archivo(s):"; echo "$CAMBIOS" | sed 's/^/    /' | head -40
+
+# 3) nada sensible: archivos prohibidos, llaves y datos de tecnova
+deshacer() { git reset -q; error "$1"; }
+echo "$CAMBIOS" | grep -E '(^|/)(\.env[^/]*|[^/]*\.env|panel\.env|cuenta\.env|usuarios\.json|cuentas\.json|respuestas\.json|creds\.json|mensajes\.db.*|tienda\.json)$|(^|/)(datos|sesion|node_modules|vendor)/' \
+  && deshacer "esos archivos son DATOS o claves y no pueden ir al repositorio"
+LLAVES='sk-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{10,}|AIza[0-9A-Za-z_-]{30,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|EAA[A-Za-z0-9]{40,}|APP_USR-[0-9-]{20,}|ghp_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY'
+DATOS='2065583357398305|51947670561|tecnovaplus\.(online|site)|chat\.tecnovaplus|crm\.tecnovaplus|haro\.tiktokers\.live'
+NUEVAS=$(git diff --cached -U0 | grep '^+' | grep -v '^+++')
+echo "$NUEVAS" | grep -qE "$LLAVES" && { echo "$NUEVAS" | grep -E "$LLAVES" | cut -c1-90; deshacer "hay una LLAVE escrita en el código"; }
+if [ "$PARTE" = crm ]; then
+  # en comentarios se permite nombrarlos; en código, no
+  echo "$NUEVAS" | grep -vE '^\+\s*(//|\*|/\*|#|<\?php //)' | grep -qE "$DATOS" \
+    && { echo "$NUEVAS" | grep -vE '^\+\s*(//|\*|/\*|#|<\?php //)' | grep -E "$DATOS" | cut -c1-110; deshacer "hay DATOS de tecnova en el código (van en el .env / Ajustes: ver App\\Libraries\\Instalacion)"; }
+fi
+ok "sin llaves, claves ni datos de tecnova"
+
+# 4) sintaxis
+for f in $(git diff --cached --name-only --diff-filter=AM); do
+  case "$f" in
+    *.php) php -l "$f" >/dev/null 2>&1 || { php -l "$f"; deshacer "error de sintaxis en $f"; } ;;
+    *.js)  case "$f" in */vendor/*|*/node_modules/*|*.min.js) ;; *) node --check "$f" 2>/dev/null || { node --check "$f"; deshacer "error de sintaxis en $f"; } ;; esac ;;
+  esac
+done
+ok "sintaxis correcta"
+
+# 5) pruebas
+case "$PARTE" in
+  robot) if ls test/*.test.js >/dev/null 2>&1; then
+           R=$(env $(env | grep -oE '^CAUSA_DB_[A-Z_]*' | sed 's/^/-u /') node --test test/*.test.js 2>&1); C=$?
+           echo "$R" | grep -E '^# (pass|fail)' | sed 's/^/    /'
+           [ $C = 0 ] || deshacer "fallan pruebas del robot"
+         fi ;;
+  chat)  [ -f bot.test.js ] && { node bot.test.js >/tmp/publicar-chat-test.log 2>&1 || { tail -5 /tmp/publicar-chat-test.log; deshacer "fallan pruebas del chat"; }; } ;;
+esac
+ok "pruebas"
+
+# 6) versión
+ANTES=$(version_actual); NUEVA=$(subir_version "$ANTES" "$TIPO")
+git rev-parse -q --verify "refs/tags/v$NUEVA" >/dev/null && deshacer "la etiqueta v$NUEVA ya existe"
+echo "  versión: $ANTES → ${NEG}$NUEVA${FIN}"
+if [ $SECO = 1 ]; then git reset -q; ok "ENSAYO terminado: no se publicó nada"; exit 0; fi
+
+if [ "$VERSIONES" = "deploy/version.json" ]; then
+  python3 - "$NUEVA" "$NOTA" <<'PY'
+import json, sys, datetime
+p = 'deploy/version.json'; j = json.load(open(p))
+j['stable'] = j['canary'] = sys.argv[1]
+j['notes'] = f"{sys.argv[1]} ({datetime.date.today():%d-%m-%Y}): {sys.argv[2]}"
+json.dump(j, open(p, 'w'), ensure_ascii=False, indent=4); open(p, 'a').write('\n')
+PY
+else
+  python3 - "$NUEVA" "$NOTA" <<'PY'
+import re, sys, datetime, os
+v, nota = sys.argv[1], sys.argv[2]
+s = open('package.json', encoding='utf-8').read()
+s = re.sub(r'("version"\s*:\s*")[^"]+(")', r'\g<1>' + v + r'\g<2>', s, count=1)
+open('package.json', 'w', encoding='utf-8').write(s)
+meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
+d = datetime.date.today(); fecha = f"{d.day}-{meses[d.month-1]}-{d.year}"
+entrada = f"## {v} — {fecha}\n{nota}\n\n"
+c = open('CHANGELOG.md', encoding='utf-8').read() if os.path.exists('CHANGELOG.md') else '# Cambios\n\n'
+i = c.find('\n## ')
+c = c[:i+1] + entrada + c[i+1:] if i >= 0 else c.rstrip('\n') + '\n\n' + entrada
+open('CHANGELOG.md', 'w', encoding='utf-8').write(c)
+PY
+  git add CHANGELOG.md
+fi
+git add "$VERSIONES"
+git commit -q -m "v$NUEVA: $NOTA" || deshacer "no se pudo hacer el commit"
+git tag -a "v$NUEVA" -m "v$NUEVA: $NOTA"
+git push -q origin "$RAMA" && git push -q origin "v$NUEVA" || error "falló la subida a GitHub (el commit v$NUEVA quedó local)"
+[ "$TAMBIEN_MAIN" = 1 ] && { git push -q origin "$RAMA:main" || error "falló la subida a main"; }
+ok "publicada ${NEG}v$NUEVA${FIN} en GitHub"
+
+# Fase 7: el paquete firmado que bajan los agentes de las hijas (sin él, la central no les ofrece la versión nueva).
+echo "  Armando el paquete firmado para las hijas…"
+if php /var/www/tecnovaplus/central/herramientas/empaquetar.php "$PARTE" "$NUEVA" > /tmp/publicar-paquete.log 2>&1; then
+  ok "paquete $PARTE-$NUEVA listo en la central ($(grep -o '([0-9.]* MB)' /tmp/publicar-paquete.log | head -1))"
+else
+  aviso "no se pudo armar el paquete (ver /tmp/publicar-paquete.log); a mano: php /var/www/tecnovaplus/central/herramientas/empaquetar.php $PARTE $NUEVA"
+fi
+
+# Fase 7: la MADRE usa ya la versión nueva (antes había que reiniciarla a mano con sudo).
+case "$PARTE" in
+  chat)
+    for u in $(systemctl list-units --no-legend --plain 'botpruebas@*.service' 2>/dev/null | awk '{print $1}'); do
+      if sudo -n systemctl restart "$u"; then ok "madre: $u reiniciado (el WhatsApp se reconecta solo)"; else aviso "no pude reiniciar $u"; fi
+    done ;;
+  robot)
+    if sudo -n systemctl restart tecnobot.service; then ok "madre: tecnobot.service reiniciado"; else aviso "no pude reiniciar tecnobot.service"; fi
+    # La puerta del conector de Claude de la madre: su propio actualizador baja la misma versión, la prueba y la reinicia.
+    for pd in /var/www/causa-conector-tecnova; do
+      if [ -d "$pd/datos/.rodobot" ]; then
+        printf '{"accion":"aplicar","version":"%s","forzar":false,"quien":"publicar","ts":"%s"}\n' "$NUEVA" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" > "$pd/datos/.rodobot/pedido.json.tmp" \
+          && mv "$pd/datos/.rodobot/pedido.json.tmp" "$pd/datos/.rodobot/pedido.json" && ok "pedida la $NUEVA a la puerta del conector ($(basename "$pd"))"
+      fi
+    done ;;
+esac
+
+case "$PARTE" in
+  crm)   echo "  MIOX la instala sola (≤ 30 min). Las demás hijas: central → «Actualizar ahora» o «Actualizar todas»." ;;
+  robot) echo "  Hijas: central → «Actualizar ahora» o «Actualizar todas» (o el botón «Actualizar» del panel de cada robot)." ;;
+  chat)  if [ $REPARTIR = 1 ]; then
+           echo "  Repartiendo a las hijas del chat…"; sudo bash "$DIR/actualizar-hijas.sh" --aplicar --reiniciar
+         else
+           echo "  Para llevarla a las hijas del chat:  sudo bash $DIR/actualizar-hijas.sh --aplicar --reiniciar"
+         fi ;;
+esac

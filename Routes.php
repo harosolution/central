@@ -40,6 +40,7 @@ $routes->group('central', ['namespace' => 'Central\Controllers'], static functio
     $routes->post('hijas', 'Panel::crear', $f);
     $routes->post('hijas/(:num)', 'Panel::editar/$1', $f);
     $routes->post('hijas/(:num)/llave', 'Panel::llave/$1', $f);
+    $routes->post('hijas/actualizar-todas', 'Panel::actualizarTodas', $f);   // fase 7
     $routes->post('hijas/(:num)/actualizar', 'Panel::actualizar/$1', $f);
     $routes->post('hijas/(:num)/instalador', 'Panel::instalador/$1', $f);
     $routes->post('hijas/(:num)/agregar-chat', 'Panel::agregarChat/$1', $f);   // fase 6c: Chat y Robot a una hija ya instalada
