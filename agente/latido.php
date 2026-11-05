@@ -64,6 +64,47 @@ function agenteVer(): string
     return preg_match("/const AGENTE_VER = '([\d.]+)'/", (string) @file_get_contents($base . '/latido.php'), $m) ? $m[1] : AGENTE_VER;
 }
 
+/** La unidad de systemd del Chat o el Robot de una hija (la que guardó el instalador, o la que corre esa carpeta). */
+function servicio_de(array $c, string $pieza): string
+{
+    $dir = rtrim((string) ($c[$pieza] ?? ''), '/');
+    if ($dir === '') {
+        return '';
+    }
+    $svc = trim((string) ($c[$pieza . '_servicio'] ?? ''));
+    if ($svc === '') {
+        foreach (glob('/etc/systemd/system/*.service') ?: [] as $f) {
+            if (strpos(basename($f), '@') !== false) {
+                continue;
+            }
+            $t = (string) @file_get_contents($f);
+            if (preg_match('#^WorkingDirectory=' . preg_quote($dir, '#') . '/?\s*$#m', $t) || preg_match('#^ExecStart=\S+\s+' . preg_quote($dir, '#') . '/\S+\.js#m', $t)) {
+                $svc = basename($f);
+                break;
+            }
+        }
+    }
+    return ($svc !== '' && substr($svc, -8) !== '.service') ? $svc . '.service' : $svc;
+}
+
+/** Chat/Robot APAGADOS a propósito (servicio detenido): la central no los actualiza, porque reiniciarlos los prendería. */
+function apagados(array $c): array
+{
+    $out = [];
+    foreach (['chat', 'robot'] as $p) {
+        $svc = servicio_de($c, $p);
+        if ($svc === '' || ! preg_match('/^[A-Za-z0-9@_.-]+$/', $svc)) {
+            continue;
+        }
+        $o = [];
+        exec('systemctl is-active ' . escapeshellarg($svc) . ' 2>/dev/null', $o);
+        if (trim((string) ($o[0] ?? '')) !== 'active') {
+            $out[] = $p;
+        }
+    }
+    return $out;
+}
+
 /** Un latido de una hija: [código HTTP, respuesta, lo enviado]. Deja estado-<nombre>.json con la última respuesta. */
 function latir(string $nombre, array $c): array
 {
@@ -78,7 +119,7 @@ function latir(string $nombre, array $c): array
         'php'      => PHP_VERSION,
         'disco_libre_gb' => $disco !== false ? round($disco / 1073741824, 1) : null,
         'extra'    => ['carga' => function_exists('sys_getloadavg') ? (sys_getloadavg()[0] ?? null) : null, 'sabe' => AGENTE_SABE,
-                       'root' => function_exists('posix_geteuid') && posix_geteuid() === 0],
+                       'root' => function_exists('posix_geteuid') && posix_geteuid() === 0, 'apagados' => apagados($c)],
     ];
     $ctx = stream_context_create(['http' => [
         'method'        => 'POST',

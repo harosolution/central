@@ -205,9 +205,12 @@ class Central
     {
         $est = self::estado($latido);
         $sabe = self::sabe($latido);
+        // Lo que el agente vio APAGADO a propósito (servicio detenido, p. ej. LUMTEC): no se toca, porque reiniciarlo lo prendería.
+        $d = json_decode((string) ($latido['datos'] ?? ''), true);
+        $apagados = is_array($d['apagados'] ?? null) ? $d['apagados'] : [];
         $piezas = [];
         $notas = [];
-        $faltaAgente = false;
+        $sinAgente = [];
         foreach (self::PIEZAS as $p) {
             $x = $est['piezas'][$p] ?? null;
             if (! $x || $x['al_dia'] !== false) {
@@ -218,13 +221,17 @@ class Central
                 continue;
             }
             if ($p !== 'crm' && ! in_array($p, $sabe, true)) {
-                $faltaAgente = true;
+                $sinAgente[] = self::NOMBRES[$p];
+                continue;
+            }
+            if (in_array($p, $apagados, true)) {
+                $notas[] = self::NOMBRES[$p] . ' está apagado a propósito: no se actualiza (se hará cuando lo prendan).';
                 continue;
             }
             $piezas[] = $p;
         }
-        if ($faltaAgente) {
-            $notas[] = 'Chat y Robot: a ese servidor le falta una vez el agente nuevo (1.3.0); hasta entonces solo se actualiza el CRM.';
+        if ($sinAgente) {
+            $notas[] = implode(' y ', $sinAgente) . ': a ese servidor le falta una vez el agente nuevo (1.3.0); hasta entonces solo se actualiza el CRM.';
         }
         return [$piezas, $est, $notas];
     }

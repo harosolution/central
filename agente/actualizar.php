@@ -226,6 +226,15 @@ if ($pieza === 'chat' || $pieza === 'robot') {
         fin('Ya está al día.', 0);
     }
 
+    // Apagado a propósito (p. ej. una hija nueva que todavía no lo usa): no se toca, porque reiniciarlo lo prendería.
+    $svc = trim((string) ($c[$pieza . '_servicio'] ?? '')) ?: servicioDe($dir);
+    if ($svc !== '' && substr($svc, -8) !== '.service') {
+        $svc .= '.service';   // el instalador lo guarda sin «.service» (haro-<hija>-chat)
+    }
+    if ($svc !== '' && trim(sh('systemctl is-active ' . escapeshellarg($svc))) !== 'active') {
+        fin("El $Nombre está apagado ($svc): no lo actualizo, porque reiniciarlo lo prendería. Se hará cuando lo prendan.");
+    }
+
     // Robot con su propio actualizador (RODOBOT 1.8+: rodobot-actualizar@<carpeta>.path): se le pide a él, que valida,
     // respalda, reinicia, vuelve atrás solo y actualiza también la puerta de su conector (RODOBOT_PUERTAS).
     $unidad = basename($dir);
@@ -265,10 +274,6 @@ if ($pieza === 'chat' || $pieza === 'robot') {
     }
     if (! esRoot() && ! is_writable($dir)) {
         fin("No puedo escribir en $dir. No se tocó nada.");
-    }
-    $svc = trim((string) ($c[$pieza . '_servicio'] ?? '')) ?: servicioDe($dir);
-    if ($svc !== '' && substr($svc, -8) !== '.service') {
-        $svc .= '.service';   // el instalador lo guarda sin «.service» (haro-<hija>-chat)
     }
     if ($svc === '' || ! preg_match('/^[A-Za-z0-9@_.-]+\.service$/', $svc) || ! is_file("/etc/systemd/system/$svc")) {
         fin("No encuentro el servicio de systemd que corre $dir. No se tocó nada.");
