@@ -13,6 +13,7 @@
 #    --sin-ssl        no pide el certificado (queda por http)
 #    --sin-chat       solo el CRM, aunque el instalador traiga Chat y Robot
 #    --sin-conector   sin el conector de Claude, aunque el instalador lo traiga (se puede poner después)
+#    --sin-shalom     sin la API de SHALOM (agencias y guías), aunque el instalador la traiga (se puede poner después)
 #
 #  Qué hace: revisa el servidor → canjea el código (la central le da a la hija su llave) → baja el CRM y comprueba
 #  la firma de la madre → base y usuario propios (estructura + roles y catálogos genéricos) → .env con secretos
@@ -55,6 +56,9 @@ TIENDA_OK=0   # fase 6d: el robot recibió su clave de la Tienda IA (Recargas IA
 # Fase 7b (5-nov-2026, Joe): el conector de Claude (MCP) del robot, como casilla del instalador. Es lo ÚLTIMO que se pone y
 # no es obligatorio: si no se puede, la instalación igual termina bien y queda el comando para ponerlo después.
 CON_CONECTOR='__CON_CONECTOR__'; CONECTOR_OK=0; CONECTOR_NOMBRE='admin'
+# Fase 7c (5-nov-2026, Joe): la API de SHALOM del CRM (agencias y guías), como casilla. Sin ella el buscador de agencias
+# sale vacío (le pasó a SIETE DESEOS). Tampoco es obligatoria: si falla, la instalación termina bien y queda el comando.
+CON_SHALOM='__CON_SHALOM__'; SHALOM_OK=0
 
 paso(){ printf '\n\033[1m%s\033[0m\n' "$*"; printf '\n== %s\n' "$*" >>"$LOG"; }
 log(){ printf '   %s\n' "$*"; printf '%s %s\n' "$(date +%T)" "$*" >>"$LOG"; }
@@ -1056,6 +1060,31 @@ conector(){
   fi
 }
 
+# Fase 7c: la API de SHALOM del CRM. La pone poner-shalom.sh (sirve igual después): Python aparte en /opt/haro-shalom/<hija>,
+# servicio haro-<hija>-shalom solo en 127.0.0.1, y el CRM apuntado a ella. Sin cuenta de SHALOM: esa la sube la hija.
+shalom(){
+  [ "$CON_SHALOM" = 1 ] || return 0
+  paso "API de SHALOM del CRM (agencias y guías)"
+  [ -f "$AGENTE_DIR/poner-shalom.sh" ] || { aviso "No tengo el ayudante de SHALOM: queda para después."; return 0; }
+  log "armando su Python (1 a 3 minutos)…"
+  if CRM_DIR="$CARPETA" SIN_PAQUETES="$SIN_PAQ" bash "$AGENTE_DIR/poner-shalom.sh" "$HIJA" </dev/null >>"$LOG" 2>&1; then
+    SHALOM_OK=1
+    log "API de SHALOM andando y el CRM apuntado a ella: el buscador de agencias ya carga"
+  else
+    aviso "No se pudo poner la API de SHALOM (ver $LOG). La instalación sigue bien. Para ponerla después:  sudo bash $AGENTE_DIR/poner-shalom.sh $HIJA"
+  fi
+}
+
+resumen_shalom(){
+  if [ "$SHALOM_OK" = 1 ]; then
+    printf '\n  SHALOM:    agencias listas (copia del catálogo). Para EMITIR guías, alguien de la empresa entra a pro.shalom.pe con\n'
+    printf '             SU cuenta y sube la sesión con la extensión «Shalom Connect» (CRM → Perfil → Extensión SHALOM).\n'
+    printf '             Su agencia de origen y sus agencias frecuentes van en Ajustes → SHALOM.\n'
+  elif [ "$CON_SHALOM" = 1 ]; then
+    printf '\n  SHALOM:    NO quedó puesta (agencias vacías). Para ponerla:  sudo bash %s/poner-shalom.sh %s\n' "$AGENTE_DIR" "$HIJA"
+  fi
+}
+
 resumen_conector(){
   [ "$CON_CHAT" = 1 ] || return 0
   if [ "$CONECTOR_OK" = 1 ]; then
@@ -1116,10 +1145,12 @@ agregar_main(){
   resumen_agregar
 }
 
-# Los ayudantes de la hija (SSL, Tienda IA y conector de Claude). Se escriben siempre: así una hija vieja recibe la versión nueva.
+# Los ayudantes de la hija (SSL, Tienda IA, conector de Claude y SHALOM). Se escriben siempre: así una hija vieja recibe la versión nueva.
 poner_ayudantes(){
   printf '%s' '__CONECTOR_B64__' | base64 -d >"$AGENTE_DIR/poner-conector.sh" && chmod 700 "$AGENTE_DIR/poner-conector.sh"
   bash -n "$AGENTE_DIR/poner-conector.sh" </dev/null 2>/dev/null || { rm -f "$AGENTE_DIR/poner-conector.sh"; aviso "El ayudante del conector de Claude llegó dañado: no lo dejo."; }
+  printf '%s' '__SHALOM_B64__' | base64 -d >"$AGENTE_DIR/poner-shalom.sh" && chmod 700 "$AGENTE_DIR/poner-shalom.sh"
+  bash -n "$AGENTE_DIR/poner-shalom.sh" </dev/null 2>/dev/null || { rm -f "$AGENTE_DIR/poner-shalom.sh"; aviso "El ayudante de SHALOM llegó dañado: no lo dejo."; }
   # Ayudante para poner el SSL después: certbot + TODA la configuración a https (CRM y, si tiene, chat y robot).
   cat >"$AGENTE_DIR/poner-ssl.sh" <<'SSL'
 #!/usr/bin/env bash
@@ -1254,6 +1285,7 @@ resumen(){
     fi
     resumen_conector
   fi
+  resumen_shalom
   if { [ "$ESQUEMA" = http ] || { [ "$CON_CHAT" = 1 ] && [ "$ESQUEMA_CHAT" = http ]; }; } && [ "$SIN_APACHE" = 0 ]; then
     printf '\n  Falta el SSL. Cuando %s, corre (pone el certificado Y pasa todo a https):\n' "$([ "$CON_CHAT" = 1 ] && echo "$DOMINIO y $DOMINIO_CHAT apunten a este servidor" || echo "$DOMINIO apunte a este servidor")"
     printf '      sudo bash %s/poner-ssl.sh %s\n' "$AGENTE_DIR" "$HIJA"
@@ -1271,11 +1303,13 @@ instalar_main(){
       --sin-ssl)      SIN_SSL=1; shift;;
       --sin-chat)     CON_CHAT=0; shift;;
       --sin-conector) CON_CONECTOR=0; shift;;
-      *) die "Opción desconocida: $1 (valen --carpeta DIR, --sin-paquetes, --sin-apache, --sin-ssl, --sin-chat, --sin-conector)";;
+      --sin-shalom)   CON_SHALOM=0; shift;;
+      *) die "Opción desconocida: $1 (valen --carpeta DIR, --sin-paquetes, --sin-apache, --sin-ssl, --sin-chat, --sin-conector, --sin-shalom)";;
     esac
   done
   [ "$CON_CHAT" = 1 ] || CON_CHAT=0
   [ "$CON_CONECTOR" = 1 ] || CON_CONECTOR=0
+  [ "$CON_SHALOM" = 1 ] || CON_SHALOM=0
   if [ "$CON_CHAT" = 1 ] && [ "$SIN_APACHE" = 1 ]; then
     printf 'AVISO: el Chat y el Robot necesitan Apache; con --sin-apache se instala solo el CRM.\n'
     CON_CHAT=0
@@ -1309,6 +1343,7 @@ instalar_main(){
   [ "$CON_CHAT" = 1 ] || https_del_proxy
   chat_robot
   agente
+  shalom
   conector
   TERMINADO=1
   reportar true "Instalada en $(hostname) · $CARPETA · CRM $VERSION · $ESQUEMA://$DOMINIO$([ "$CON_CHAT" = 1 ] && echo " · Chat y Robot en $ESQUEMA_CHAT://$DOMINIO_CHAT")"

@@ -190,9 +190,11 @@ class Instalador
             'creada_en' => date('Y-m-d H:i:s', $ahora), 'vence_en' => date('Y-m-d H:i:s', $ahora + self::VIGENCIA_H * 3600),
             'con_chat' => $conChat ? 1 : 0, 'dominio_chat' => $domChat, 'nombre_robot' => $nombreRobot,
             'con_conector' => $conChat && ! empty($d['con_conector']) ? 1 : 0,   // fase 7b: el conector de Claude (va con el Robot)
+            'con_shalom' => ! empty($d['con_shalom']) ? 1 : 0,                    // fase 7c: la API de SHALOM del CRM (agencias y guías)
         ]);
         $que = $conChat ? "CRM $ver + Chat " . self::versionInstalable('chat') . ' y Robot ' . self::versionInstalable('robot')
             . (! empty($d['con_conector']) ? ' con conector de Claude' : '') . " en $domChat" : "CRM $ver";
+        $que .= ! empty($d['con_shalom']) ? ', con API de SHALOM' : '';
         return [true, "Instalador de «{$h['nombre']}» listo ($que). Vale " . self::VIGENCIA_H . ' horas.', $codigo];
     }
 
@@ -229,10 +231,11 @@ class Instalador
         $latido = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/latido.php');
         $actualizar = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/actualizar.php');
         $conector = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/poner-conector.sh');   // fase 7b
+        $shalom = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/poner-shalom.sh');       // fase 7c
         if (! $v) {
             return self::scriptError('Este código de instalación no existe, ya se usó o venció (duran ' . self::VIGENCIA_H . ' h). Pide uno nuevo en la central.');
         }
-        if ($ver === null || ! preg_match('/^[0-9a-f]{64}$/', $pk) || $tpl === '' || $latido === '' || $actualizar === '' || $conector === '') {
+        if ($ver === null || ! preg_match('/^[0-9a-f]{64}$/', $pk) || $tpl === '' || $latido === '' || $actualizar === '' || $conector === '' || $shalom === '') {
             return self::scriptError('La central no tiene listo el paquete del CRM. Avísale a soporte.');
         }
         $conChat = (int) ($v['inst']['con_chat'] ?? 0) === 1;
@@ -247,6 +250,8 @@ class Instalador
             '__CON_CHAT__'        => $conChat ? '1' : '0',
             '__CON_CONECTOR__'    => $conChat && (int) ($v['inst']['con_conector'] ?? 0) === 1 ? '1' : '0',
             '__CONECTOR_B64__'    => base64_encode($conector),
+            '__CON_SHALOM__'      => ! $agregar && (int) ($v['inst']['con_shalom'] ?? 0) === 1 ? '1' : '0',
+            '__SHALOM_B64__'      => base64_encode($shalom),
             '__DOMINIO_CHAT__'    => $conChat ? (string) $v['inst']['dominio_chat'] : '',
             '__VERSION_CHAT__'    => (string) $vChat,
             '__VERSION_ROBOT__'   => (string) $vRobot,

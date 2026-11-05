@@ -50,6 +50,8 @@ fi
 
 # 1) Python de la API
 if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
+  # SIN_PAQUETES=1: lo usa el instalador con --sin-paquetes (no instalar nada con apt).
+  [ "${SIN_PAQUETES:-0}" != 1 ] || { echo "Falta python3-venv y se pidió no instalar paquetes:  sudo apt install python3-venv" >&2; exit 1; }
   say "Instalando python3-venv…"
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv >/dev/null
@@ -75,7 +77,14 @@ TOK="$(sed -nE 's/^API_TOKEN=//p' "$SH/.env" | tail -1 | tr -d '\r ')"
 HDR="$(mktemp)"; TMPS+=("$HDR"); chmod 600 "$HDR"
 printf 'X-Api-Token: %s\n' "$TOK" > "$HDR"
 
-# 3) Servicio
+# 3) Servicio. Si es nuevo y la API no llega a servir el catálogo, se quita: no queda un servicio reiniciándose en falso.
+UNIT_NUEVA=0; [ -f "$UNIT" ] || UNIT_NUEVA=1
+quitar_unidad() {
+  [ "$UNIT_NUEVA" = 1 ] || return 0
+  systemctl disable --now "$SVC" >/dev/null 2>&1 || true
+  rm -f "$UNIT"; systemctl daemon-reload || true
+  echo "Quité el servicio $SVC que acababa de crear." >&2
+}
 cat > "$UNIT" <<EOF
 [Unit]
 Description=API de SHALOM de $HIJA (127.0.0.1:$PUERTO) — solo la usa el CRM de esta hija; puesta con poner-shalom.sh
@@ -107,11 +116,12 @@ for _ in $(seq 1 40); do
 done
 if [ "$ok" != 1 ]; then
   journalctl -u "$SVC" -n 30 --no-pager >&2 || true
+  quitar_unidad
   echo "La API no arrancó (arriba su registro). El CRM no se tocó." >&2; exit 1
 fi
 N="$(curl -fsS -m 30 -H @"$HDR" "http://127.0.0.1:$PUERTO/terminals?source=local" \
      | python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("Map",[])))' 2>/dev/null || echo 0)"
-[ "${N:-0}" -gt 100 ] || { echo "La API arrancó pero no sirve el catálogo de agencias ($N). El CRM no se tocó." >&2; exit 1; }
+[ "${N:-0}" -gt 100 ] || { quitar_unidad; echo "La API arrancó pero no sirve el catálogo de agencias ($N). El CRM no se tocó." >&2; exit 1; }
 say "API de SHALOM andando en 127.0.0.1:$PUERTO · catálogo de $N agencias."
 
 # 4) Apuntar el CRM a la API
