@@ -889,7 +889,34 @@ EOF
   cod="$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H "x-bot-key: $CRM_KEY" "http://127.0.0.1:$P_CHAT/estado" </dev/null || true)"
   [ "$cod" = 200 ] || die "El chat no aceptó la clave del CRM (HTTP $cod)."
   log "CRM enlazado: entra al chat sin otra clave, manda WhatsApp por él y muestra el Robot en su barra"
+  https_del_proxy
   probar_fallo chat
+}
+
+# Servidor detrás de un proxy del proveedor que ya da el https (Traefik de DatabaseMart y parecidos): certbot no pudo o
+# el CRM no tiene certificado en Apache, pero https://<dominio> funciona por fuera. Entonces toda la configuración
+# (CRM, chat y robot) tiene que decir https: si no, el chat le habla al CRM por http (los POST rebotan en la
+# redirección) y el CRM no puede mostrar el chat en su marco. Se mira por el DNS público, validando el certificado.
+https_del_proxy(){
+  local cambia=0 f dom pub_crm pub_chat='' doms archivos
+  [ "$SIN_APACHE" = 0 ] || return 0
+  pub_crm="$(curl -s -o /dev/null -m 15 -w '%{http_code}' "https://$DOMINIO/admin/" </dev/null || true)"
+  [ "$CON_CHAT" = 1 ] && pub_chat="$(curl -s -o /dev/null -m 15 -w '%{http_code}' "https://$DOMINIO_CHAT/login" </dev/null || true)"
+  [ "$ESQUEMA" = http ] && [[ "$pub_crm" =~ ^(200|302)$ ]] && { ESQUEMA=https; cambia=1; }
+  [ "$CON_CHAT" = 1 ] && [ "$ESQUEMA_CHAT" = http ] && [ "$pub_chat" = 200 ] && { ESQUEMA_CHAT=https; cambia=1; }
+  [ "$cambia" = 1 ] || return 0
+  doms=("$DOMINIO"); archivos=("$CARPETA/.env")
+  [ "$CON_CHAT" = 1 ] && { doms+=("$DOMINIO_CHAT"); archivos+=("$CHAT_DIR/panel.env" "$CHAT_DIR/datos/$HIJA/cuenta.env" "$ROBOT_DIR/.env"); }
+  for f in "${archivos[@]}"; do
+    [ -f "$f" ] || continue
+    for dom in "${doms[@]}"; do sed -i "s#http://$dom#https://$dom#g" "$f"; done
+  done
+  if [ "$CON_CHAT" = 1 ]; then
+    mysql "$DB" -e "UPDATE system_settings SET v = REPLACE(v, 'http://$DOMINIO_CHAT', 'https://$DOMINIO_CHAT') WHERE company_id = 1 AND k = 'chatbot_admin_url'" </dev/null >>"$LOG" 2>&1 || true
+    systemctl restart "$UNIDAD_CHAT" "$UNIDAD_ROBOT" >>"$LOG" 2>&1 || true
+    esperar_http "http://127.0.0.1:$P_CHAT/login" 200 40 || die "El chat no volvió a arrancar después de pasarlo a https."
+  fi
+  log "el https lo da un proxy del proveedor: la configuración quedó en https"
 }
 
 poner_agente(){   # $1 = latido | actualizar   $2 = el archivo en base64
@@ -926,9 +953,11 @@ leer_hija(){
   EMPRESA="${EMPRESA:-$HIJA}"
   ADMIN_EMAIL="$(mysql -N "$DB" -e "SELECT u.email FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'super_admin' AND u.company_id = 1 AND u.is_active = 1 ORDER BY u.id LIMIT 1" </dev/null 2>/dev/null || true)"
   [ -n "$ADMIN_EMAIL" ] || { LLAVE=''; die "El CRM no tiene un super_admin activo para enlazarlo al chat."; }
-  # El .env puede decir http aunque el certificado ya esté puesto (SSL a mano): se mira el sitio de verdad, con el
-  # certificado VALIDADO para este dominio (sin -k: en un servidor con varios sitios respondería el de otro).
+  # El .env puede decir http aunque haya https (SSL a mano, o un proxy del proveedor que lo da): se mira el sitio de
+  # verdad, con el certificado VALIDADO (sin -k: en un servidor con varios sitios respondería el de otro). Primero aquí
+  # mismo; si no, por el DNS público (proxy delante).
   cod="$(curl -s -o /dev/null -m 15 --resolve "$DOMINIO:443:127.0.0.1" -w '%{http_code}' "https://$DOMINIO/admin/" </dev/null || true)"
+  [[ "$cod" =~ ^(200|301|302)$ ]] || cod="$(curl -s -o /dev/null -m 15 -w '%{http_code}' "https://$DOMINIO/admin/" </dev/null || true)"
   if [[ "$cod" =~ ^(200|301|302)$ ]]; then ESQUEMA=https; else ESQUEMA=http; fi
   CLAVE="$(openssl rand -base64 30 | tr -dc 'A-Za-z0-9' | cut -c1-14)"   # la del usuario admin del CHAT (desde el CRM entra sin clave)
   log "CRM $CARPETA ($ESQUEMA://$DOMINIO) · base $DB · empresa «$EMPRESA» · administrador $ADMIN_EMAIL"
@@ -1205,6 +1234,7 @@ instalar_main(){
   entorno
   sitio
   salud
+  [ "$CON_CHAT" = 1 ] || https_del_proxy
   chat_robot
   agente
   TERMINADO=1
