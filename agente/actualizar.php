@@ -5,19 +5,21 @@
  *   php actualizar.php <hija>                          → el CRM a la última versión publicada
  *   php actualizar.php <hija> --pieza chat|robot       → el Chat o el Robot (y la puerta de su conector de Claude, si tiene)
  *   php actualizar.php <hija> --pieza agente           → este mismo agente (latido.php, actualizar.php, poner-conector.sh)
+ *   php actualizar.php <hija> --pieza shalom           → solo reinicia la API de SHALOM del CRM (si tiene) y prueba que responda
  *   … [--seco] (solo baja y comprueba la firma, no toca nada) · [--version X.Y.Z]
  *
  * Siempre: pedir a la central la última versión → bajar el paquete → comprobar sha256 + firma ed25519 (llave pública escrita
  * aquí: un paquete que no firmó la madre NO se instala) → respaldo → copiar encima → prueba de salud → si algo falla después
  * de copiar, vuelve solo a lo anterior.
- *   CRM: nunca .env, writable/, ni datos de la hija (fotos, landings, tienda.json…); migraciones aditivas.
+ *   CRM: nunca .env, writable/, ni datos de la hija (fotos, landings, tienda.json…); migraciones aditivas. Si el paquete
+ *        cambia el código de su API de SHALOM (shalom-integracion/), la reinicia (1.3.4); si no vuelve, revierte todo.
  *   Chat: nunca panel.env, usuarios.json, cuentas.json, respuestas.json, datos/, la sesión de WhatsApp ni mensajes.db.
  *   Robot: nunca .env ni datos/. Si el robot tiene su propio actualizador (rodobot-actualizar@…), se le pide a él.
  *   node_modules solo se cambia si cambió el package-lock.json.
  * Chat y Robot se reinician con systemctl: el agente corre como root (instalador de una línea) o con `sudo -n`.
  * Prueba del «vuelve solo»: HARO_ACTUALIZAR_FALLAR_EN=salud php actualizar.php <hija> --pieza chat
  */
-const AGENTE_VER = '1.3.3';
+const AGENTE_VER = '1.3.4';
 const LLAVE_PUBLICA = 'b8f6c1675fe4fbe201e4d9b8dab96e97403409184336884484356e4853ea710a';
 // Archivos que trae el paquete del CRM pero son de la hija (si ya existen, no se pisan).
 const CONSERVAR = [
@@ -62,10 +64,10 @@ function http200(string $url, int $intentos, string $debeTener = ''): bool
 }
 
 if (! preg_match('/^[a-z0-9_-]+$/', $hija) || ! is_file("$base/hijas/$hija.json")) {
-    fin("Uso: php actualizar.php <hija> [--pieza crm|chat|robot|agente] [--seco] [--version X.Y.Z]  (hijas: " . implode(', ', array_map(fn ($f) => basename($f, '.json'), glob("$base/hijas/*.json") ?: [])) . ')');
+    fin("Uso: php actualizar.php <hija> [--pieza crm|chat|robot|agente|shalom] [--seco] [--version X.Y.Z]  (hijas: " . implode(', ', array_map(fn ($f) => basename($f, '.json'), glob("$base/hijas/*.json") ?: [])) . ')');
 }
-if (! in_array($pieza, ['crm', 'chat', 'robot', 'agente'], true)) {
-    fin("--pieza: crm, chat, robot o agente.");
+if (! in_array($pieza, ['crm', 'chat', 'robot', 'agente', 'shalom'], true)) {
+    fin("--pieza: crm, chat, robot, agente o shalom.");
 }
 if (! function_exists('sodium_crypto_sign_verify_detached')) {
     fin('Este PHP no tiene sodium: no puedo comprobar la firma, no instalo nada.');
@@ -184,6 +186,89 @@ function nodeDe(string $svc): string
     return preg_match('#^ExecStart=(\S*node)\s#m', $t, $m) && is_file($m[1]) ? $m[1] : 'node';
 }
 
+// ── API de SHALOM del CRM (fase 7d, agente 1.3.4) ───────────────────────────────────────────────────────────────────────
+// El código viaja con el CRM (shalom-integracion/) pero corre en su propio servicio (haro-<hija>-shalom, o shalom-api-* en la
+// madre): sin reinicio seguiría con el código viejo hasta el próximo arranque del servidor, que lo estrenaría sin probarlo.
+
+/** Huella del código de la API (app/*.py) y de sus librerías (requirements.txt). */
+function huellaShalom(string $crm): array
+{
+    $fs = glob("$crm/shalom-integracion/app/*.py") ?: [];
+    sort($fs);
+    $h = '';
+    foreach ($fs as $f) {
+        $h .= basename($f) . ':' . sha1_file($f) . ';';
+    }
+    $req = "$crm/shalom-integracion/requirements.txt";
+    return ['codigo' => $h === '' ? '' : sha1($h), 'req' => is_file($req) ? (string) sha1_file($req) : ''];
+}
+
+/** El servicio que corre la API de SHALOM de ese CRM: [unidad, andando] ('' si no tiene). */
+function servicioShalom(string $crm): array
+{
+    return is_dir("$crm/shalom-integracion") ? unidadDe("$crm/shalom-integracion", 'app.main:app') : ['', false];
+}
+
+/**
+ * Reinicia la API de SHALOM y prueba su /health. Con $libs, antes le pone las librerías de requirements.txt en SU Python.
+ * Devuelve [estado, texto]:  ok · pendiente (no se reinició: sigue con lo de antes, no se rompió nada) · fallo (se
+ * reinició y no responde: quien llama decide si vuelve atrás). $fallar = prueba del «vuelve solo».
+ */
+function reiniciarShalom(string $svc, string $dir, bool $libs, bool $fallar): array
+{
+    $t = (string) @file_get_contents("/etc/systemd/system/$svc");
+    $py = preg_match('#^ExecStart=(\S*python[0-9.]*)\s#m', $t, $m) ? $m[1] : '';
+    $puerto = preg_match('#--port[ =](\d+)#', $t, $m) ? (int) $m[1] : 0;
+    $sudo = esRoot() ? '' : 'sudo -n ';
+    if ($sudo !== '') {
+        sh('sudo -n -l systemctl restart ' . escapeshellarg($svc), $rcs);
+        if ($rcs !== 0) {
+            $usr = function_exists('posix_getpwuid') ? (string) (posix_getpwuid(posix_geteuid())['name'] ?? 'administrator') : 'administrator';
+            return ['pendiente', "sin permiso para reiniciarla ($svc): sigue con el código anterior. Una sola vez, con root: "
+                . "echo '$usr ALL=(root) NOPASSWD: /usr/bin/systemctl restart $svc' | sudo tee /etc/sudoers.d/haro-agente-" . basename($svc, '.service')];
+        }
+    }
+    if ($libs) {
+        $venv = $py !== '' ? dirname($py, 2) : '';
+        if ($py === '' || ! is_file($py) || (! esRoot() && ! is_writable("$venv/lib"))) {
+            return ['pendiente', "cambiaron sus librerías y no puedo instalarlas aquí: sigue con el código anterior. Con root: "
+                . "$py -m pip install -r $dir/requirements.txt && systemctl restart $svc"];
+        }
+        $o = sh(escapeshellarg($py) . ' -m pip install -q --no-cache-dir --disable-pip-version-check -r ' . escapeshellarg("$dir/requirements.txt"), $rcp);
+        if ($rcp !== 0) {
+            return ['pendiente', 'no se pudieron instalar sus librerías nuevas (' . mb_substr(trim($o), -160) . '): sigue con el código anterior'];
+        }
+    }
+    sh($sudo . 'systemctl restart ' . escapeshellarg($svc), $rcr);
+    if ($rcr !== 0) {
+        return ['fallo', "no se pudo reiniciar $svc"];
+    }
+    if ($puerto <= 0) {
+        return ['ok', "reiniciada ($svc; su servicio no dice el puerto, no la pude probar)"];
+    }
+    if ($fallar || ! http200("http://127.0.0.1:$puerto/health", 40, '"ok"')) {
+        return ['fallo', "$svc no responde en 127.0.0.1:$puerto/health" . ($fallar ? ' (falla de prueba)' : '')];
+    }
+    return ['ok', "reiniciada y respondiendo ($svc)"];
+}
+
+// ================================================================== API DE SHALOM: solo reiniciarla y probarla
+if ($pieza === 'shalom') {
+    $crm = rtrim((string) ($c['crm'] ?? ''), '/');
+    [$svc, $andando] = $crm !== '' ? servicioShalom($crm) : ['', false];
+    if ($svc === '') {
+        fin('Esta hija no tiene API de SHALOM. Para ponerla, con root:  bash poner-shalom.sh ' . $hija);
+    }
+    if (! $andando) {
+        fin("Su API de SHALOM ($svc) está apagada: desde aquí no la prendo.");
+    }
+    if ($seco) {
+        fin("ENSAYO: su API de SHALOM es $svc y está andando. No se tocó nada.", 0);
+    }
+    [$est, $msg] = reiniciarShalom($svc, "$crm/shalom-integracion", false, $FALLAR === 'shalom');
+    $est === 'ok' ? fin("LISTO: API de SHALOM $msg.", 0) : fin("API de SHALOM: $msg.");
+}
+
 // ================================================================== EL AGENTE (se reemplaza a sí mismo)
 if ($pieza === 'agente') {
     $tiene = preg_match("/const AGENTE_VER = '([\\d.]+)'/", (string) @file_get_contents("$base/latido.php"), $m) ? $m[1] : '';
@@ -241,7 +326,7 @@ if ($pieza === 'chat' || $pieza === 'robot') {
     $dir = rtrim((string) ($c[$pieza] ?? ''), '/');
     $main = $pieza === 'chat' ? 'servidor.js' : 'server.js';
     if ($dir === '' || ! is_file("$dir/$main") || ! is_file("$dir/package.json")) {
-        fin("Esta hija no tiene $Nombre (o su carpeta no es válida: «$dir»).");
+        fin("Esta hija no tiene $Nombre (o su carpeta no es válida: «{$dir}»).");
     }
     if (is_dir("$dir/.git")) {
         fin("$dir se maneja con git (es una madre o una copia de trabajo): no la toco desde aquí.");
@@ -497,9 +582,12 @@ foreach ($it as $f) {
 if ($noPuedo) {
     fin(count($noPuedo) . ' archivo(s) del CRM no se pueden escribir sin permisos (ej. ' . implode(', ', array_slice($noPuedo, 0, 5)) . '). No se tocó nada.');
 }
+// Su API de SHALOM (si tiene): la huella de su código ANTES de copiar dice después si hay que reiniciarla.
+[$shSvc, $shAndando] = servicioShalom($crm);
+$shAntes = huellaShalom($crm);
 if ($seco) {
     sh('rm -rf ' . escapeshellarg($stage));
-    fin("ENSAYO: paquete $ver comprobado y aplicable. No se tocó nada.", 0);
+    fin("ENSAYO: paquete $ver comprobado y aplicable" . ($shSvc !== '' ? " (su API de SHALOM, $shSvc, " . ($shAndando ? 'se reinicia si el paquete cambia su código' : 'está apagada: no se toca') . ')' : '') . '. No se tocó nada.', 0);
 }
 
 // 4) Respaldos (base + código)
@@ -526,11 +614,14 @@ if ($rc > 1) {   // 1 = «archivo cambió mientras se leía»: aceptable
 say('Respaldos: ' . basename($dump) . ' y ' . basename($codigo));
 
 // 5) Aplicar
-$volver = function (string $motivo) use ($codigo, $crm, $devolverDueno): void {
+$volver = function (string $motivo, ?callable $despues = null) use ($codigo, $crm, $devolverDueno): void {
     say("Algo falló ($motivo): devuelvo el código anterior…");
     sh('rm -rf ' . escapeshellarg("$crm/vendor"));
     sh('tar xzf ' . escapeshellarg($codigo) . ' -C ' . escapeshellarg($crm), $rc);
     $devolverDueno();
+    if ($despues !== null) {
+        $despues();
+    }
     fin($rc === 0 ? "Revertido. El CRM quedó como estaba ($motivo)." : "¡NO SE PUDO REVERTIR! Restaurar a mano desde $codigo");
 };
 // vendor se reemplaza entero (no quedan librerías viejas mezcladas)
@@ -572,8 +663,30 @@ if (! $ok) {
     sh('rm -rf ' . escapeshellarg("$crm/vendor") . ' && mv ' . escapeshellarg("$crm/vendor.viejo-$ts") . ' ' . escapeshellarg("$crm/vendor"));
     $volver("salud: $url respondió $cod");
 }
+
+// 8) Su API de SHALOM (1.3.4): si el paquete cambió su código, se reinicia para que lo use (si cambiaron sus librerías, se
+//    las pone primero). Si no vuelve a responder, se revierte TODO el CRM y la API arranca otra vez con el código de antes.
+//    Apagada a propósito o sin API: no se toca. Sin permiso para reiniciarla: el CRM queda y se avisa (no rompe nada).
+$shNota = '';
+$shDespues = huellaShalom($crm);
+if ($shSvc !== '' && $shAndando && ($shDespues !== $shAntes || $FALLAR === 'shalom')) {
+    say("El paquete cambia el código de su API de SHALOM: reinicio {$shSvc}…");
+    [$shEst, $shMsg] = reiniciarShalom($shSvc, "$crm/shalom-integracion", $shDespues['req'] !== $shAntes['req'], $FALLAR === 'shalom');
+    if ($shEst === 'fallo') {
+        sh('rm -rf ' . escapeshellarg("$crm/vendor") . ' && mv ' . escapeshellarg("$crm/vendor.viejo-$ts") . ' ' . escapeshellarg("$crm/vendor"));
+        $volver("API de SHALOM: $shMsg", static function () use ($shSvc): void {
+            // Con el código de antes: se reinicia y se ESPERA a que responda (arranca en ~1 s), para no decir «quedó bien» a ciegas.
+            sh((esRoot() ? '' : 'sudo -n ') . 'systemctl restart ' . escapeshellarg($shSvc), $rcv);
+            $p = preg_match('#--port[ =](\d+)#', (string) @file_get_contents("/etc/systemd/system/$shSvc"), $m) ? (int) $m[1] : 0;
+            $vive = $rcv === 0 && ($p <= 0 || http200("http://127.0.0.1:$p/health", 40, '"ok"'));
+            say($vive ? "API de SHALOM otra vez con el código anterior y respondiendo ($shSvc)."
+                : "OJO: $shSvc no volvió a responder con el código anterior; revisar con: journalctl -u $shSvc -n 50");
+        });
+    }
+    $shNota = $shEst === 'ok' ? " · API de SHALOM $shMsg" : " · OJO, API de SHALOM: $shMsg";
+}
 sh('rm -rf ' . escapeshellarg("$crm/vendor.viejo-$ts") . ' ' . escapeshellarg($stage));
 podar('crm');
-say("LISTO: CRM $tiene → $ver (salud OK en $url).");
+say("LISTO: CRM $tiene → $ver (salud OK en $url)$shNota.");
 passthru('php ' . escapeshellarg("$base/latido.php"));
 exit(0);
