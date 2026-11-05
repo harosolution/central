@@ -17,7 +17,7 @@
  * Chat y Robot se reinician con systemctl: el agente corre como root (instalador de una línea) o con `sudo -n`.
  * Prueba del «vuelve solo»: HARO_ACTUALIZAR_FALLAR_EN=salud php actualizar.php <hija> --pieza chat
  */
-const AGENTE_VER = '1.3.2';
+const AGENTE_VER = '1.3.3';
 const LLAVE_PUBLICA = 'b8f6c1675fe4fbe201e4d9b8dab96e97403409184336884484356e4853ea710a';
 // Archivos que trae el paquete del CRM pero son de la hija (si ya existen, no se pisan).
 const CONSERVAR = [
@@ -299,17 +299,22 @@ if ($pieza === 'chat' || $pieza === 'robot') {
 
     // Instalar el paquete aquí mismo.
     $sudo = esRoot() ? '' : 'sudo -n ';
-    if ($sudo !== '') {
-        sh('sudo -n true', $rcs);
-        if ($rcs !== 0) {
-            fin("Sin permiso para reiniciar el $Nombre: el agente no es root ni tiene sudo sin clave. Hace falta una vez darle ese permiso. No se tocó nada.");
-        }
-    }
     if (! esRoot() && ! is_writable($dir)) {
         fin("No puedo escribir en $dir. No se tocó nada.");
     }
     if ($svc === '' || ! preg_match('/^[A-Za-z0-9@_.-]+\.service$/', $svc) || ! is_file("/etc/systemd/system/$svc")) {
         fin("No encuentro el servicio de systemd que corre $dir. No se tocó nada.");
+    }
+    // Sin root alcanza con el permiso JUSTO de reiniciar ese servicio (una línea en /etc/sudoers.d, de una vez); no hace
+    // falta sudo completo: los archivos ya son del usuario del agente.
+    if ($sudo !== '') {
+        $usr = function_exists('posix_getpwuid') ? (string) (posix_getpwuid(posix_geteuid())['name'] ?? 'administrator') : 'administrator';
+        sh('sudo -n -l systemctl restart ' . escapeshellarg($svc), $rcs);
+        if ($rcs !== 0) {
+            fin("Sin permiso para reiniciar el $Nombre ($svc). Una sola vez, alguien con root en este servidor: "
+                . "echo '$usr ALL=(root) NOPASSWD: /usr/bin/systemctl restart $svc' | sudo tee /etc/sudoers.d/haro-agente-" . basename($svc, '.service')
+                . " && sudo chmod 440 /etc/sudoers.d/haro-agente-" . basename($svc, '.service') . '  · No se tocó nada.');
+        }
     }
     if ($pieza === 'chat') {
         $puerto = envDe("$dir/panel.env", 'PORT');
@@ -357,8 +362,9 @@ if ($pieza === 'chat' || $pieza === 'robot') {
         fin('No se pudo respaldar el código. No se tocó nada.');
     }
     say('Respaldo: ' . basename($resp));
-    $duenoDe = static function (string $d) use ($sudo): void {
-        if (esRoot() || $sudo !== '') { sh($sudo . 'chown -R --reference=' . escapeshellarg($d) . ' ' . escapeshellarg($d)); }
+    // Solo root crea archivos de otro dueño; sin root lo copiado ya es del usuario del agente (que puede escribir ahí).
+    $duenoDe = static function (string $d): void {
+        if (esRoot()) { sh('chown -R --reference=' . escapeshellarg($d) . ' ' . escapeshellarg($d)); }
     };
     $volver = function (string $motivo) use ($dir, $resp, $nmNuevo, $ts, $svc, $sudo, $salud, $duenoDe, $Nombre): void {
         say("Algo falló ($motivo): vuelvo al $Nombre anterior…");

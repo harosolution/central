@@ -18,7 +18,7 @@
  * actualiza a sí mismo (una vez por servidor) y después cada pieza con actualizar.php (ya el nuevo); cada resultado se
  * avisa a la central. Nunca se actualiza sola: solo lo que pidió Joe, el cliente o la casilla «actualizar sola».
  */
-const AGENTE_VER = '1.3.2';   // 1.3.0: también Chat, Robot y el propio agente (fase 7) · 1.3.1: carpetas de trabajo vuelven a su dueño tras un sudo · 1.3.2: el servicio es el que corre servidor.js/server.js (no causa-fichas)
+const AGENTE_VER = '1.3.3';   // 1.3.3: sin root basta el permiso de reiniciar ese servicio · 1.3.0: también Chat, Robot y el propio agente (fase 7) · 1.3.1: carpetas de trabajo vuelven a su dueño tras un sudo · 1.3.2: el servicio es el que corre servidor.js/server.js (no causa-fichas)
 // Lo que sabe hacer este agente: la central solo le pide eso (los agentes viejos solo saben el CRM).
 const AGENTE_SABE = ['piezas', 'agente', 'chat', 'robot'];
 
