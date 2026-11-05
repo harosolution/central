@@ -14,6 +14,7 @@
 #    --sin-chat       solo el CRM, aunque el instalador traiga Chat y Robot
 #    --sin-conector   sin el conector de Claude, aunque el instalador lo traiga (se puede poner después)
 #    --sin-shalom     sin la API de SHALOM (agencias y guías), aunque el instalador la traiga (se puede poner después)
+#    --sin-soporte    sin el acceso de soporte HARO (usuario haro-soporte), aunque el instalador lo traiga
 #
 #  Qué hace: revisa el servidor → canjea el código (la central le da a la hija su llave) → baja el CRM y comprueba
 #  la firma de la madre → base y usuario propios (estructura + roles y catálogos genéricos) → .env con secretos
@@ -59,6 +60,10 @@ CON_CONECTOR='__CON_CONECTOR__'; CONECTOR_OK=0; CONECTOR_NOMBRE='admin'
 # Fase 7c (5-nov-2026, Joe): la API de SHALOM del CRM (agencias y guías), como casilla. Sin ella el buscador de agencias
 # sale vacío (le pasó a SIETE DESEOS). Tampoco es obligatoria: si falla, la instalación termina bien y queda el comando.
 CON_SHALOM='__CON_SHALOM__'; SHALOM_OK=0
+# Fase 7e (5-nov-2026, Joe: «imagínate cuando tenga 500 empresas»): acceso de soporte HARO. Usuario haro-soporte que solo
+# entra con las llaves de HARO y tiene el permiso JUSTO para esta tienda: mirar registros, reiniciar sus servicios y correr
+# el agente. Lo que haya que cambiar se cambia en la madre. Va al final y tampoco es obligatorio.
+CON_SOPORTE='__CON_SOPORTE__'; SOPORTE_OK=0; SOPORTE_PUERTO=''
 
 paso(){ printf '\n\033[1m%s\033[0m\n' "$*"; printf '\n== %s\n' "$*" >>"$LOG"; }
 log(){ printf '   %s\n' "$*"; printf '%s %s\n' "$(date +%T)" "$*" >>"$LOG"; }
@@ -75,7 +80,8 @@ jcampo(){ printf '%s' "$1" | php -r '$j = json_decode(stream_get_contents(STDIN)
 reportar(){
   [ -n "$LLAVE" ] || return 0
   local cuerpo
-  cuerpo="$(OK="$1" MSG="$2" VER="$VERSION" php -r 'echo json_encode(["ok" => getenv("OK") === "true", "mensaje" => mb_substr((string) getenv("MSG"), 0, 480), "version" => getenv("VER")], JSON_UNESCAPED_UNICODE);' </dev/null 2>/dev/null || true)"
+  # soporte: con qué usuario y puerto se entra (la central lo anota en la hija si todavía no tenía cómo entrar).
+  cuerpo="$(OK="$1" MSG="$2" VER="$VERSION" SOP="$SOPORTE_OK" SPP="$SOPORTE_PUERTO" php -r 'echo json_encode(["ok" => getenv("OK") === "true", "mensaje" => mb_substr((string) getenv("MSG"), 0, 480), "version" => getenv("VER"), "soporte" => getenv("SOP") === "1" ? ["usuario" => "haro-soporte", "puerto" => (int) getenv("SPP")] : null], JSON_UNESCAPED_UNICODE);' </dev/null 2>/dev/null || true)"
   curl -sS -m 20 -o /dev/null -X POST -H 'Content-Type: application/json' -H "Authorization: Bearer $LLAVE" \
        --data "$cuerpo" "$CENTRAL/api/instalacion" </dev/null >/dev/null 2>&1 || true
 }
@@ -1085,6 +1091,36 @@ resumen_shalom(){
   fi
 }
 
+# Fase 7e: acceso de soporte HARO (poner-soporte.sh; sirve igual después y se quita con --quitar). Va al final: así el
+# permiso ya incluye todos los servicios de la tienda (chat, robot, conector, shalom).
+soporte(){
+  [ "$CON_SOPORTE" = 1 ] || return 0
+  paso "Acceso de soporte HARO"
+  [ -f "$AGENTE_DIR/poner-soporte.sh" ] || { aviso "No tengo el ayudante de soporte: queda para después."; return 0; }
+  local out rc=0
+  out="$(CRM_DIR="$CARPETA" AGENTE_DIR="$AGENTE_DIR" bash "$AGENTE_DIR/poner-soporte.sh" "$HIJA" </dev/null 2>&1)" || rc=$?
+  printf '%s\n' "$out" >>"$LOG"
+  if [ "$rc" = 0 ]; then
+    SOPORTE_OK=1
+    SOPORTE_PUERTO="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)"; SOPORTE_PUERTO="${SOPORTE_PUERTO:-22}"
+    log "usuario haro-soporte listo (solo con las llaves de HARO; permiso justo para esta tienda)"
+    # Lo que el ayudante vio en el SSH de este servidor y podría impedir la entrada (AllowUsers, sin llaves…).
+    grep -E '^· OJO' <<<"$out" | while IFS= read -r l; do aviso "${l#· }"; done || true
+  else
+    aviso "No se pudo poner el acceso de soporte (ver $LOG). La instalación sigue bien. Para ponerlo después:  sudo bash $AGENTE_DIR/poner-soporte.sh $HIJA"
+  fi
+}
+
+resumen_soporte(){
+  if [ "$SOPORTE_OK" = 1 ]; then
+    printf '\n  Soporte:   ssh -p %s haro-soporte@%s   (solo con las llaves de HARO; mira registros y reinicia esta tienda)\n' "$SOPORTE_PUERTO" "${IP_VISTA:-<ip>}"
+    printf '             Si el servidor está detrás de un proxy del proveedor, el puerto de afuera es otro: corrígelo en la central.\n'
+    printf '             Quitarlo:  sudo bash %s/poner-soporte.sh %s --quitar\n' "$AGENTE_DIR" "$HIJA"
+  elif [ "$CON_SOPORTE" = 1 ]; then
+    printf '\n  Soporte:   NO quedó puesto. Para ponerlo:  sudo bash %s/poner-soporte.sh %s\n' "$AGENTE_DIR" "$HIJA"
+  fi
+}
+
 resumen_conector(){
   [ "$CON_CHAT" = 1 ] || return 0
   if [ "$CONECTOR_OK" = 1 ]; then
@@ -1121,6 +1157,7 @@ resumen_agregar(){
   printf '\n  Clave del usuario admin del CHAT: %s\n' "$CLAVE"
   printf '             ↑ solo para entrar al chat directo; anótala. No se vuelve a mostrar.\n'
   resumen_conector
+  resumen_soporte
   printf '\n  El CRM quedó enlazado (respaldo de su .env: %s).\n' "$(basename "$ENV_RESPALDO")"
   printf '  Registro (sin claves): %s\n' "$LOG"
   printf '  Pendiente en el Robot: productos, medios de pago y encenderlo.\n'
@@ -1140,6 +1177,7 @@ agregar_main(){
   chat_robot
   agente_agregar
   conector
+  soporte
   TERMINADO=1
   reportar true "Chat y Robot agregados en $(hostname) · $ESQUEMA_CHAT://$DOMINIO_CHAT"
   resumen_agregar
@@ -1151,6 +1189,8 @@ poner_ayudantes(){
   bash -n "$AGENTE_DIR/poner-conector.sh" </dev/null 2>/dev/null || { rm -f "$AGENTE_DIR/poner-conector.sh"; aviso "El ayudante del conector de Claude llegó dañado: no lo dejo."; }
   printf '%s' '__SHALOM_B64__' | base64 -d >"$AGENTE_DIR/poner-shalom.sh" && chmod 700 "$AGENTE_DIR/poner-shalom.sh"
   bash -n "$AGENTE_DIR/poner-shalom.sh" </dev/null 2>/dev/null || { rm -f "$AGENTE_DIR/poner-shalom.sh"; aviso "El ayudante de SHALOM llegó dañado: no lo dejo."; }
+  printf '%s' '__SOPORTE_B64__' | base64 -d >"$AGENTE_DIR/poner-soporte.sh" && chmod 700 "$AGENTE_DIR/poner-soporte.sh"
+  bash -n "$AGENTE_DIR/poner-soporte.sh" </dev/null 2>/dev/null || { rm -f "$AGENTE_DIR/poner-soporte.sh"; aviso "El ayudante de soporte llegó dañado: no lo dejo."; }
   # Ayudante para poner el SSL después: certbot + TODA la configuración a https (CRM y, si tiene, chat y robot).
   cat >"$AGENTE_DIR/poner-ssl.sh" <<'SSL'
 #!/usr/bin/env bash
@@ -1286,6 +1326,7 @@ resumen(){
     resumen_conector
   fi
   resumen_shalom
+  resumen_soporte
   if { [ "$ESQUEMA" = http ] || { [ "$CON_CHAT" = 1 ] && [ "$ESQUEMA_CHAT" = http ]; }; } && [ "$SIN_APACHE" = 0 ]; then
     printf '\n  Falta el SSL. Cuando %s, corre (pone el certificado Y pasa todo a https):\n' "$([ "$CON_CHAT" = 1 ] && echo "$DOMINIO y $DOMINIO_CHAT apunten a este servidor" || echo "$DOMINIO apunte a este servidor")"
     printf '      sudo bash %s/poner-ssl.sh %s\n' "$AGENTE_DIR" "$HIJA"
@@ -1304,12 +1345,14 @@ instalar_main(){
       --sin-chat)     CON_CHAT=0; shift;;
       --sin-conector) CON_CONECTOR=0; shift;;
       --sin-shalom)   CON_SHALOM=0; shift;;
-      *) die "Opción desconocida: $1 (valen --carpeta DIR, --sin-paquetes, --sin-apache, --sin-ssl, --sin-chat, --sin-conector, --sin-shalom)";;
+      --sin-soporte)  CON_SOPORTE=0; shift;;
+      *) die "Opción desconocida: $1 (valen --carpeta DIR, --sin-paquetes, --sin-apache, --sin-ssl, --sin-chat, --sin-conector, --sin-shalom, --sin-soporte)";;
     esac
   done
   [ "$CON_CHAT" = 1 ] || CON_CHAT=0
   [ "$CON_CONECTOR" = 1 ] || CON_CONECTOR=0
   [ "$CON_SHALOM" = 1 ] || CON_SHALOM=0
+  [ "$CON_SOPORTE" = 1 ] || CON_SOPORTE=0
   if [ "$CON_CHAT" = 1 ] && [ "$SIN_APACHE" = 1 ]; then
     printf 'AVISO: el Chat y el Robot necesitan Apache; con --sin-apache se instala solo el CRM.\n'
     CON_CHAT=0
@@ -1345,6 +1388,7 @@ instalar_main(){
   agente
   shalom
   conector
+  soporte
   TERMINADO=1
   reportar true "Instalada en $(hostname) · $CARPETA · CRM $VERSION · $ESQUEMA://$DOMINIO$([ "$CON_CHAT" = 1 ] && echo " · Chat y Robot en $ESQUEMA_CHAT://$DOMINIO_CHAT")"
   resumen

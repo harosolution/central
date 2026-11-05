@@ -235,7 +235,8 @@ class Api extends Controller
             return $hija;
         }
         $b = $this->request->getJSON(true) ?: [];
-        Instalador::reportar((int) $hija['id'], ! empty($b['ok']), (string) ($b['mensaje'] ?? ''), (string) ($b['version'] ?? ''));
+        Instalador::reportar((int) $hija['id'], ! empty($b['ok']), (string) ($b['mensaje'] ?? ''), (string) ($b['version'] ?? ''),
+            is_array($b['soporte'] ?? null) ? $b['soporte'] : []);   // fase 7e: cómo entrar a dar soporte
         return $this->response->setJSON(['ok' => true]);
     }
 

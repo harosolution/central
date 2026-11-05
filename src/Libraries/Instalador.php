@@ -112,8 +112,10 @@ class Instalador
             'creada_en' => date('Y-m-d H:i:s', $ahora), 'vence_en' => date('Y-m-d H:i:s', $ahora + self::VIGENCIA_H * 3600),
             'con_chat' => 1, 'dominio_chat' => $domChat, 'nombre_robot' => $nombreRobot,
             'con_conector' => ! empty($d['con_conector']) ? 1 : 0,   // fase 7b
+            'con_soporte' => ! empty($d['con_soporte']) ? 1 : 0,     // fase 7e: acceso de soporte HARO
         ]);
-        return [true, "Comando para agregar Chat $vChat y Robot $vRobot" . (! empty($d['con_conector']) ? ' (con conector de Claude)' : '') . " a «{$h['nombre']}» en $domChat. Vale " . self::VIGENCIA_H . ' horas.', $codigo];
+        $extras = array_filter([! empty($d['con_conector']) ? 'conector de Claude' : '', ! empty($d['con_soporte']) ? 'acceso de soporte' : '']);
+        return [true, "Comando para agregar Chat $vChat y Robot $vRobot" . ($extras ? ' (con ' . implode(' y ', $extras) . ')' : '') . " a «{$h['nombre']}» en $domChat. Vale " . self::VIGENCIA_H . ' horas.', $codigo];
     }
 
     private static function limpiaVer($v): string
@@ -191,10 +193,12 @@ class Instalador
             'con_chat' => $conChat ? 1 : 0, 'dominio_chat' => $domChat, 'nombre_robot' => $nombreRobot,
             'con_conector' => $conChat && ! empty($d['con_conector']) ? 1 : 0,   // fase 7b: el conector de Claude (va con el Robot)
             'con_shalom' => ! empty($d['con_shalom']) ? 1 : 0,                    // fase 7c: la API de SHALOM del CRM (agencias y guías)
+            'con_soporte' => ! empty($d['con_soporte']) ? 1 : 0,                  // fase 7e: acceso de soporte HARO
         ]);
         $que = $conChat ? "CRM $ver + Chat " . self::versionInstalable('chat') . ' y Robot ' . self::versionInstalable('robot')
             . (! empty($d['con_conector']) ? ' con conector de Claude' : '') . " en $domChat" : "CRM $ver";
         $que .= ! empty($d['con_shalom']) ? ', con API de SHALOM' : '';
+        $que .= ! empty($d['con_soporte']) ? ', con acceso de soporte' : '';
         return [true, "Instalador de «{$h['nombre']}» listo ($que). Vale " . self::VIGENCIA_H . ' horas.', $codigo];
     }
 
@@ -232,10 +236,11 @@ class Instalador
         $actualizar = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/actualizar.php');
         $conector = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/poner-conector.sh');   // fase 7b
         $shalom = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/poner-shalom.sh');       // fase 7c
+        $soporte = (string) @file_get_contents(dirname(__DIR__, 2) . '/agente/poner-soporte.sh');     // fase 7e
         if (! $v) {
             return self::scriptError('Este código de instalación no existe, ya se usó o venció (duran ' . self::VIGENCIA_H . ' h). Pide uno nuevo en la central.');
         }
-        if ($ver === null || ! preg_match('/^[0-9a-f]{64}$/', $pk) || $tpl === '' || $latido === '' || $actualizar === '' || $conector === '' || $shalom === '') {
+        if ($ver === null || ! preg_match('/^[0-9a-f]{64}$/', $pk) || $tpl === '' || $latido === '' || $actualizar === '' || $conector === '' || $shalom === '' || $soporte === '') {
             return self::scriptError('La central no tiene listo el paquete del CRM. Avísale a soporte.');
         }
         $conChat = (int) ($v['inst']['con_chat'] ?? 0) === 1;
@@ -252,6 +257,8 @@ class Instalador
             '__CONECTOR_B64__'    => base64_encode($conector),
             '__CON_SHALOM__'      => ! $agregar && (int) ($v['inst']['con_shalom'] ?? 0) === 1 ? '1' : '0',
             '__SHALOM_B64__'      => base64_encode($shalom),
+            '__CON_SOPORTE__'     => (int) ($v['inst']['con_soporte'] ?? 0) === 1 ? '1' : '0',
+            '__SOPORTE_B64__'     => base64_encode($soporte),
             '__DOMINIO_CHAT__'    => $conChat ? (string) $v['inst']['dominio_chat'] : '',
             '__VERSION_CHAT__'    => (string) $vChat,
             '__VERSION_ROBOT__'   => (string) $vRobot,
@@ -376,7 +383,7 @@ class Instalador
     }
 
     /** El instalador avisa cómo terminó (con la llave recién canjeada). */
-    public static function reportar(int $hijaId, bool $ok, string $mensaje, string $version): void
+    public static function reportar(int $hijaId, bool $ok, string $mensaje, string $version, array $soporte = []): void
     {
         $db = Central::db();
         $i = $db->table('instalaciones')->where('hija_id', $hijaId)->where('estado', 'canjeado')->orderBy('id', 'DESC')->get()->getRowArray();
@@ -387,6 +394,15 @@ class Instalador
             'estado' => $ok ? 'instalada' : 'fallo', 'mensaje' => mb_substr($mensaje, 0, 500), 'terminada_en' => date('Y-m-d H:i:s'),
             'version' => preg_match('/^\d+\.\d+\.\d+$/', $version) ? $version : $i['version'],
         ]);
+        // Fase 7e: cómo entrar a dar soporte (usuario y puerto que vio el instalador + la IP con la que llegó a la central).
+        // Solo si la hija todavía no tiene cómo entrar: si Joe ya lo corrigió a mano (puerto de un proxy), no se pisa.
+        $u = (string) ($soporte['usuario'] ?? '');
+        $p = (int) ($soporte['puerto'] ?? 0);
+        $ip = trim((string) ($i['ip'] ?? ''));
+        if ($ok && preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $u) && $p > 0 && $p < 65536 && filter_var($ip, FILTER_VALIDATE_IP)) {
+            $db->table('hijas')->where('id', $hijaId)->groupStart()->where('soporte', '')->orWhere('soporte IS NULL', null, false)->groupEnd()
+                ->update(['soporte' => "ssh -p $p $u@$ip"]);
+        }
         // Falló: el robot se borró y su clave con él → la cuenta de Recargas IA que creó este intento se desactiva.
         if (! $ok && ! empty($i['ia_cuenta_id'])) {
             self::cuentaIa('desactivar', (string) (int) $i['ia_cuenta_id']);

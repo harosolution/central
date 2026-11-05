@@ -88,6 +88,8 @@ class Panel extends Controller
             'nombre'   => $p('nombre', 80),
             'dominio'  => strtolower(preg_replace('#^https?://#i', '', rtrim($p('dominio'), '/'))),
             'servidor' => $p('servidor', 120),
+            // fase 7e: cómo entrar a dar soporte (ej. «ssh -p 10060 haro-soporte@93.127.139.147»); solo caracteres de un comando ssh
+            'soporte'  => preg_replace('/[^A-Za-z0-9@._: \/-]/', '', $p('soporte', 160)),
             'notas'    => $p('notas', 500),
             'plan_id'  => (int) $this->request->getPost('plan_id') ?: null,
             'vence_en' => preg_match('/^\d{4}-\d{2}-\d{2}$/', $vence) ? $vence : null,
@@ -173,7 +175,7 @@ class Panel extends Controller
             'admin_nombre' => (string) $r->getPost('admin_nombre'), 'admin_email' => (string) $r->getPost('admin_email'),
             'con_chat' => (bool) $r->getPost('con_chat'), 'dominio_chat' => (string) $r->getPost('dominio_chat'),
             'nombre_robot' => (string) $r->getPost('nombre_robot'), 'con_conector' => (bool) $r->getPost('con_conector'),
-            'con_shalom' => (bool) $r->getPost('con_shalom')], 'joe');
+            'con_shalom' => (bool) $r->getPost('con_shalom'), 'con_soporte' => (bool) $r->getPost('con_soporte')], 'joe');
         if (! $ok) {
             return $this->volver('hijas', null, $msg);
         }
@@ -189,7 +191,8 @@ class Panel extends Controller
         }
         $r = $this->request;
         [$ok, $msg, $codigo] = Instalador::crearCodigoChat($id, ['dominio_chat' => (string) $r->getPost('dominio_chat'),
-            'nombre_robot' => (string) $r->getPost('nombre_robot'), 'con_conector' => (bool) $r->getPost('con_conector')], 'joe');
+            'nombre_robot' => (string) $r->getPost('nombre_robot'), 'con_conector' => (bool) $r->getPost('con_conector'),
+            'con_soporte' => (bool) $r->getPost('con_soporte')], 'joe');
         if (! $ok) {
             return $this->volver('hijas', null, $msg);
         }

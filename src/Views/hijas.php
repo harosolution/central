@@ -82,6 +82,7 @@ $porActualizar = array_values(array_filter($hijas, static fn ($h) => (int) $h['a
           </td>
           <td class="text-xs text-[#9CA3AF]">
             <?= esc($h['servidor']) ?>
+            <?php if (trim((string) ($h['soporte'] ?? '')) !== ''): ?><div class="mt-1" title="Para entrar a revisar (con la llave de HARO). Lo que haya que cambiar, se cambia en la madre."><span class="text-[#E5E7EB]">Soporte:</span> <code class="select-all text-[#22C55E]"><?= esc($h['soporte']) ?></code></div><?php endif; ?>
             <?php if ($l): ?><div><?= esc($l['servidor']) ?> · PHP <?= esc($l['php_ver']) ?><?= $l['disco_libre_gb'] !== null ? ' · ' . esc($l['disco_libre_gb']) . ' GB libres' : '' ?></div><?php endif; ?>
           </td>
           <td style="min-width:190px">
@@ -92,6 +93,7 @@ $porActualizar = array_values(array_filter($hijas, static fn ($h) => (int) $h['a
                 <label class="ce-lbl">Nombre<input class="ce-in" name="nombre" value="<?= esc($h['nombre']) ?>"></label>
                 <label class="ce-lbl">Dominio<input class="ce-in" name="dominio" value="<?= esc($h['dominio']) ?>"></label>
                 <label class="ce-lbl">Servidor<input class="ce-in" name="servidor" value="<?= esc($h['servidor']) ?>"></label>
+                <label class="ce-lbl" title="Lo llena solo el instalador. Corrígelo si el servidor está detrás de un proxy del proveedor (el puerto de afuera es otro).">Soporte (cómo entrar)<input class="ce-in" name="soporte" maxlength="160" placeholder="ssh -p 22 haro-soporte@1.2.3.4" value="<?= esc((string) ($h['soporte'] ?? '')) ?>"></label>
                 <label class="ce-lbl">Plan
                   <select class="ce-in" name="plan_id"><option value="">— Sin plan —</option>
                     <?php foreach ($planes as $p): ?><option value="<?= (int) $p['id'] ?>" <?= (int) $h['plan_id'] === (int) $p['id'] ? 'selected' : '' ?>><?= esc($p['nombre']) ?> · S/ <?= number_format((float) $p['precio'], 2) ?></option><?php endforeach; ?>
@@ -121,6 +123,7 @@ $porActualizar = array_values(array_filter($hijas, static fn ($h) => (int) $h['a
                 <label class="ce-lbl">Dominio del chat (el robot va en /tecnobot/)<input class="ce-in" name="dominio_chat" maxlength="120" placeholder="<?= esc($h['dominio'] !== '' ? \Central\Libraries\Instalador::dominioChat($h['dominio']) : 'chat.empresa.com') ?>" value="<?= esc(($ic['tipo'] ?? '') === 'chat' ? $ic['dominio_chat'] : '') ?>"></label>
                 <label class="ce-lbl">Nombre de la vendedora IA<input class="ce-in" name="nombre_robot" maxlength="40" placeholder="Asistente" value="<?= esc(($ic['tipo'] ?? '') === 'chat' ? $ic['nombre_robot'] : '') ?>"></label>
                 <label class="text-xs flex items-center gap-2" title="Para auditar y configurar el robot desde Claude (solo edita su borrador). La clave va a nombre del administrador."><input type="checkbox" name="con_conector" value="1" <?= ($ic['tipo'] ?? '') !== 'chat' || (int) ($ic['con_conector'] ?? 1) === 1 ? 'checked' : '' ?>> Con conector de Claude</label>
+                <label class="text-xs flex items-center gap-2" title="Usuario haro-soporte que solo entra con las llaves de HARO: mirar registros, reiniciar los servicios de esta tienda y correr el agente. No es sudo completo; se quita con poner-soporte.sh --quitar."><input type="checkbox" name="con_soporte" value="1" <?= ($ic['tipo'] ?? '') !== 'chat' || (int) ($ic['con_soporte'] ?? 1) === 1 ? 'checked' : '' ?>> Con acceso de soporte HARO</label>
                 <div class="text-xs text-[#9CA3AF]">Para una hija ya instalada con el instalador de una línea. El comando se pega en SU servidor (usa la llave de su agente) y no toca sus ventas ni su CRM, salvo el enlace con el chat. El dominio del chat debe apuntar a ese servidor.</div>
                 <button class="ce-btn bg-[#22C55E] text-[#0B1220]">Crear comando</button>
               </form>
@@ -139,6 +142,7 @@ $porActualizar = array_values(array_filter($hijas, static fn ($h) => (int) $h['a
                 <label class="ce-lbl">Dominio del chat (el robot va en /tecnobot/)<input class="ce-in" name="dominio_chat" maxlength="120" placeholder="<?= esc($h['dominio'] !== '' ? \Central\Libraries\Instalador::dominioChat($h['dominio']) : 'chat.empresa.com') ?>" value="<?= esc($in['dominio_chat'] ?? '') ?>"></label>
                 <label class="ce-lbl">Nombre de la vendedora IA<input class="ce-in" name="nombre_robot" maxlength="40" placeholder="Asistente" value="<?= esc($in['nombre_robot'] ?? '') ?>"></label>
                 <label class="text-xs flex items-center gap-2" title="Va con el Robot. Para auditar y configurar el robot desde Claude (solo edita su borrador). La clave va a nombre del administrador."><input type="checkbox" name="con_conector" value="1" <?= ! $in || (int) ($in['con_conector'] ?? 1) === 1 ? 'checked' : '' ?>> Con conector de Claude</label>
+                <label class="text-xs flex items-center gap-2" title="Usuario haro-soporte que solo entra con las llaves de HARO: mirar registros, reiniciar los servicios de esta tienda y correr el agente. No es sudo completo; se quita con poner-soporte.sh --quitar. La central anota cómo entrar."><input type="checkbox" name="con_soporte" value="1" <?= ! $in || (int) ($in['con_soporte'] ?? 1) === 1 ? 'checked' : '' ?>> Con acceso de soporte HARO</label>
                 <div class="text-xs text-[#9CA3AF]">Dominio del CRM: <b><?= esc($h['dominio'] !== '' ? $h['dominio'] : 'falta: ponlo en Editar') ?></b>. Los dos dominios deben apuntar al servidor. Te doy un comando de una línea que vale 48 h.</div>
                 <button class="ce-btn bg-[#22C55E] text-[#0B1220]">Crear instalador</button>
               </form>
