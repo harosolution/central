@@ -19,7 +19,7 @@
  * Chat y Robot se reinician con systemctl: el agente corre como root (instalador de una línea) o con `sudo -n`.
  * Prueba del «vuelve solo»: HARO_ACTUALIZAR_FALLAR_EN=salud php actualizar.php <hija> --pieza chat
  */
-const AGENTE_VER = '1.3.4';
+const AGENTE_VER = '1.3.5';
 const LLAVE_PUBLICA = 'b8f6c1675fe4fbe201e4d9b8dab96e97403409184336884484356e4853ea710a';
 // Archivos que trae el paquete del CRM pero son de la hija (si ya existen, no se pisan).
 const CONSERVAR = [
@@ -442,6 +442,9 @@ if ($pieza === 'chat' || $pieza === 'robot') {
     $resp = "$base/respaldos/$hija-$pieza-$ts.tgz";
     $ex = '';
     foreach (array_merge(PROPIO[$pieza], ['node_modules', 'vendor-causa/node_modules']) as $p) { $ex .= ' --exclude=' . escapeshellarg("./$p"); }
+    // 1.3.5 (5-nov-2026, VITAWEB): las copias viejas (*.bak*, *.respaldo*) no hacen falta para volver atrás, y una de root que
+    // el agente no puede leer hacía fallar el respaldo («No se pudo respaldar el código») y frenaba toda la actualización.
+    $ex .= ' --exclude=' . escapeshellarg('*.bak*') . ' --exclude=' . escapeshellarg('*.respaldo*');
     sh('tar czf ' . escapeshellarg($resp) . ' -C ' . escapeshellarg($dir) . $ex . ' .', $rc);
     if ($rc > 1) {
         fin('No se pudo respaldar el código. No se tocó nada.');
